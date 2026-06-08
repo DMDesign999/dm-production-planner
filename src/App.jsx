@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './supabaseClient'
-import { loadAll, insertJob, updateJob, deleteJobDb, setCapacityDb, clearCapacityDb, setDeptResDb, seedIfEmpty } from './data'
+import { loadAll, insertJob, updateJob, deleteJobDb, setCapacityDb, clearCapacityDb, setDeptResDb, seedIfEmpty, setDaySequenceDb } from './data'
 
 // ─── Constants ───────────────────────────────────────────────
 const DEPTS = [
@@ -55,13 +55,14 @@ function migrateJob(job){
     return out
   }
   return {
-    priority:'normal', dueDate:'',
+    priority:'normal', dueDate:'', customer:'', subtitle:'', reopened:false,
     ...job,
     deptMins:remap(job.deptMins),
     waits:remap(job.waits),
     resources:remap(job.resources),
     done:remap(job.done||{}),
     actual:remap(job.actual||{}),
+    pins:remap(job.pins||{}),
   }
 }
 
@@ -78,6 +79,9 @@ export default function App({ session }) {
   const [loadErr, setLoadErr] = useState(null)
 
   const [view, setView] = useState('month')
+  const [page, setPage] = useState('planner') // 'planner' | 'late' | 'completed'
+  const [search, setSearch] = useState('')
+  const [daySeq, setDaySeq] = useState({}) // "dept|day" -> [jobId,...]
   const [anchor, setAnchor] = useState(() => todayStr())
   const [cursor, setCursor] = useState(() => { const d = new Date(); return { y:d.getFullYear(), m:d.getMonth() } })
   const [tab, setTab] = useState('all')
@@ -86,16 +90,16 @@ export default function App({ session }) {
   const [capEdit, setCapEdit] = useState(null)
   const [capVal, setCapVal] = useState('')
   const [form, setForm] = useState(null)
-  const [dirty, setDirty] = useState(false) // schedule changed, awaiting reschedule
+  const [dirty, setDirty] = useState(false)
   const [dragJob, setDragJob] = useState(null) // {jobId, dept}
 
-  // Load all data from Supabase, then subscribe to realtime changes
   async function refresh() {
     try {
-      const { jobs:j, capacity:c, deptRes:r } = await loadAll()
+      const { jobs:j, capacity:c, deptRes:r, daySeq:s } = await loadAll()
       setJobsRaw(j.map(migrateJob))
       setCapacity(c)
       if (Object.keys(r).length) setDeptRes(r)
+      setDaySeq(s || {})
       setLoadErr(null)
     } catch (e) {
       setLoadErr(e.message || 'Failed to load data')
@@ -107,19 +111,16 @@ export default function App({ session }) {
   useEffect(() => {
     let active = true
     ;(async () => {
-      // Seed default dept resources on very first run
       try { await seedIfEmpty(Object.fromEntries(DEPTS.map(d=>[d.key,d.res]))) } catch {}
       if (active) await refresh()
     })()
-
-    // Realtime: any change to any table → reload (simple + reliable)
     const channel = supabase
       .channel('planner-changes')
       .on('postgres_changes', { event:'*', schema:'public', table:'jobs' }, () => refresh())
       .on('postgres_changes', { event:'*', schema:'public', table:'capacity' }, () => refresh())
       .on('postgres_changes', { event:'*', schema:'public', table:'dept_resources' }, () => refresh())
+      .on('postgres_changes', { event:'*', schema:'public', table:'day_sequence' }, () => refresh())
       .subscribe()
-
     return () => { active = false; supabase.removeChannel(channel) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -141,9 +142,28 @@ export default function App({ session }) {
     return { date, min }
   }
 
-  // ── Scheduling engine (priority → due → start; forward; locked done steps) ──
+  // ── Scheduling engine (manual day-seq → priority → due → start; forward; locked done steps) ──
   const { entries, jobFinish } = useMemo(() => {
+    // Build a manual-priority boost map: any job appearing in a day_sequence list
+    // gets ordered by its position there (earlier = scheduled first). We collapse
+    // all sequence lists into a single ranking hint keyed by jobId.
+    const manualRank = {}
+    Object.values(daySeq || {}).forEach(list => {
+      (list || []).forEach((jid, idx) => {
+        // smaller = earlier; keep the strongest (smallest) hint seen
+        if (manualRank[jid] === undefined || idx < manualRank[jid]) manualRank[jid] = idx
+      })
+    })
+    const hasManual = Object.keys(manualRank).length > 0
+
     const ordered = [...jobs].sort((a,b)=>{
+      // Manual sequence wins when both jobs are manually ordered
+      if(hasManual){
+        const ma=manualRank[a.id], mb=manualRank[b.id]
+        if(ma!==undefined && mb!==undefined && ma!==mb) return ma-mb
+        if(ma!==undefined && mb===undefined) return -1
+        if(ma===undefined && mb!==undefined) return 1
+      }
       const pa=PRIORITY[a.priority||'normal'].rank, pb=PRIORITY[b.priority||'normal'].rank
       if(pa!==pb) return pa-pb
       const da=a.dueDate||'9999-12-31', db=b.dueDate||'9999-12-31'
@@ -170,11 +190,14 @@ export default function App({ session }) {
           const wm = waitMins((job.waits||{})[phases[pi-1]]||{})
           if(wm>0){ cur = advCursor(cur,wm); if(isWknd(cur.date)) cur = { date:nextWd(cur.date), min:WD } }
         }
+        const pin = (job.pins||{})[dk]
+        if(pin && pin>cur.date){
+          cur = { date:pin, min:WD }
+          while(isWknd(cur.date)) cur = { date:addDays(cur.date,1), min:WD }
+        }
         const jr = (job.resources||{})[dk]||0
         const actualRes = jr>0 ? Math.min(jr, resOf(dk)) : 1
-        // use actual minutes if recorded, else estimate
         let remMM = ((job.actual||{})[dk] && isDone) ? job.actual[dk] : job.deptMins[dk]
-        const stepStartDate = cur.date
         while(remMM>0){
           if(isWknd(cur.date)){ cur={date:addDays(cur.date,1),min:WD}; continue }
           const usedMM = ents.filter(e=>e.dept===dk&&e.date===cur.date).reduce((s,e)=>s+e.manMins,0)
@@ -199,15 +222,32 @@ export default function App({ session }) {
       finish[job.id] = lastEnd
     }
     return { entries:ents, jobFinish:finish }
-  }, [jobs, capacity, deptRes])
+  }, [jobs, capacity, deptRes, daySeq])
 
-  // is a job's step "ready" (all prior steps done)?
+  // step ready = all prior steps done
   const stepReady = (job, dept) => {
     const phases = DKEYS.filter(k => (job.deptMins[k]||0)>0)
     const idx = phases.indexOf(dept)
     if(idx<=0) return true
     for(let i=0;i<idx;i++){ if(!(job.done||{})[phases[i]]) return false }
     return true
+  }
+
+  // whole-job completion + lateness helpers
+  const jobPhases = job => DKEYS.filter(k => (job.deptMins[k]||0)>0)
+  const isComplete = job => { const p=jobPhases(job); return p.length>0 && p.every(k=>(job.done||{})[k]) }
+  const lateness = job => {
+    if(!job.dueDate) return { state:'none' }
+    const fin = jobFinish[job.id]
+    if(!fin) return { state:'none' }
+    if(fin > job.dueDate){
+      const days = Math.round((parseD(fin)-parseD(job.dueDate))/(1000*60*60*24))
+      return { state:'late', days, finish:fin }
+    }
+    // at risk = finishes within 1 day of due
+    const daysToSpare = Math.round((parseD(job.dueDate)-parseD(fin))/(1000*60*60*24))
+    if(daysToSpare <= 1) return { state:'risk', days:daysToSpare, finish:fin }
+    return { state:'ok', finish:fin }
   }
 
   const show = tab==='all' ? DEPTS : DEPTS.filter(d=>d.key===tab)
@@ -257,39 +297,68 @@ export default function App({ session }) {
     const dp=deptOf(e.dept)
     const ready = stepReady(job, e.dept)
     const done = e.done
-    // colour state: done = solid green tint check; not ready = hollow/grey; ready = normal dept colour
-    let bg=dp.bg, txt=dp.text, bl=dp.color, opacity=1, dash=false
-    if(done){ bg='#EAF7EE'; txt='#1a5c2e'; bl='#2ecc71' }
+    const complete = isComplete(job)
+    // Distinct states:
+    //  complete (whole job)   → green hatch, "✓" tag, faded but clearly "finished"
+    //  step done              → green tint, ✓, strikethrough
+    //  waiting on prev step   → grey, dashed border
+    //  ready/in-progress      → normal dept colour
+    let bg=dp.bg, txt=dp.text, bl=dp.color, dash=false, hatch=false
+    if(complete){ bg='#dff0e3'; txt='#2c6e3c'; bl='#2ecc71'; hatch=true }
+    else if(done){ bg='#EAF7EE'; txt='#1a5c2e'; bl='#2ecc71' }
     else if(!ready){ bg='#f4f4f4'; txt='#999'; bl='#ccc'; dash=true }
     const prio = PRIORITY[job.priority||'normal']
+    const pinned = !!(job.pins||{})[e.dept]
+    const label = [job.title, job.customer, job.subtitle].filter(Boolean)
     return (
-      <div key={i} className="pill" draggable={!done}
-           style={{background:bg,color:txt,borderLeft:`${dash?'2px dashed':'2px solid'} ${bl}`,opacity}}
-           title={`${job.title} | ${fmtT(e.s)}–${fmtT(e.e)} | ${fmtM(e.mins)} | ×${e.resources}${done?' | DONE':ready?'':' | waiting on previous step'}`}
+      <div key={i} className={`pill${hatch?' pill-complete':''}`} draggable={!done&&!complete}
+           style={{background:bg,color:txt,borderLeft:`${dash?'2px dashed':'2px solid'} ${bl}`}}
+           title={`${label.join(' · ')} | ${fmtT(e.s)}–${fmtT(e.e)} | ${fmtM(e.mins)} | ×${e.resources}${pinned?` | 📌 ${(job.pins||{})[e.dept]}`:''}${complete?' | ✓ COMPLETE':done?' | step done':ready?'':' | waiting on previous step'}`}
            onClick={ev=>{ev.stopPropagation();openEdit(job.id)}}
-           onDragStart={()=>!done&&setDragJob({jobId:job.id,dept:e.dept})}
+           onDragStart={()=>!done&&!complete&&setDragJob({jobId:job.id,dept:e.dept})}
            onDragEnd={()=>setDragJob(null)}>
-        <span className="tick" onClick={ev=>{ev.stopPropagation();toggleDone(job.id,e.dept)}} title="Mark this step done">
-          {done?'✓':'○'}
+        {!complete && (
+          <span className="tick" onClick={ev=>{ev.stopPropagation();toggleDone(job.id,e.dept)}}
+                title={ready?'Mark this step done':'Complete the previous step first'}
+                style={{color: done?'#2ecc71':ready?'#999':'#ccc', cursor: ready||done?'pointer':'not-allowed'}}>
+            {done?'✓':'○'}
+          </span>
+        )}
+        {complete && <span style={{fontSize:8,flexShrink:0,fontWeight:700,color:'#2c6e3c'}}>✓</span>}
+        {pinned && <span style={{fontSize:8,flexShrink:0}} title="Pinned start">📌</span>}
+        {job.priority==='high' && !complete && <span className="prio-dot" style={{background:prio.color}} title="High priority" />}
+        <span style={{overflow:'hidden',textOverflow:'ellipsis',flex:1,fontWeight:600,textDecoration:(done||complete)?'line-through':'none',opacity:complete?0.7:1}}>
+          <span style={{fontWeight:700}}>{job.title}</span>
+          {job.customer && <span style={{opacity:.85}}> · {job.customer}</span>}
+          {job.subtitle && <span style={{opacity:.6}}> · {job.subtitle}</span>}
         </span>
-        {job.priority==='high' && <span className="prio-dot" style={{background:prio.color}} title="High priority" />}
-        <span style={{overflow:'hidden',textOverflow:'ellipsis',flex:1,fontWeight:600,textDecoration:done?'line-through':'none'}}>{job.title}</span>
         {e.resources>1 && <span style={{background:bl,color:'#fff',borderRadius:2,padding:'0 3px',fontSize:8,fontWeight:700,flexShrink:0}}>×{e.resources}</span>}
         {withTime && <span style={{opacity:.6,fontSize:8,flexShrink:0}}>{fmtT(e.s)}</span>}
       </div>
     )
   }
 
-  // drop a dragged step onto a later date → set that job's start (or push) and mark dirty
+  // Drop a dragged step onto a date → pin THAT step's earliest-start there.
+  // Allowed to move earlier or later, as long as it's not before the previous step can finish.
   const onDropDate = (date) => {
     if(!dragJob) return
     const job = jobs.find(j=>j.id===dragJob.jobId); if(!job){ setDragJob(null); return }
-    const cur = entries.filter(e=>e.dept===dragJob.dept&&e.jobId===job.id).sort((a,b)=>a.date<b.date?-1:1)[0]
-    if(!cur){ setDragJob(null); return }
-    if(date<=cur.date){ setDragJob(null); return }
-    const deltaDays = (parseD(date)-parseD(cur.date))/(1000*60*60*24)
-    const newStart = addDays(job.startDate, Math.round(deltaDays))
-    const updated = {...job, startDate:newStart}
+    const phases = DKEYS.filter(k => (job.deptMins[k]||0)>0)
+    const idx = phases.indexOf(dragJob.dept)
+    // Earliest this step may start = the day the previous step finishes (or job start for first step)
+    let earliest = job.startDate
+    if(idx>0){
+      const prevDept = phases[idx-1]
+      const prevEnts = entries.filter(e=>e.jobId===job.id && e.dept===prevDept)
+      if(prevEnts.length){ earliest = prevEnts.map(e=>e.date).sort().slice(-1)[0] }
+    }
+    if(date < earliest){
+      // can't go before the previous step finishes — clamp to earliest
+      date = earliest
+    }
+    const pins = {...(job.pins||{})}
+    pins[dragJob.dept] = date
+    const updated = {...job, pins}
     setJobs(jobs.map(j=>j.id===job.id?updated:j))
     updateJob(updated).catch(e=>setLoadErr(e.message))
     setDirty(true)
@@ -298,6 +367,13 @@ export default function App({ session }) {
 
   const toggleDone = (jobId, dept) => {
     const job = jobs.find(j=>j.id===jobId); if(!job) return
+    const isDoneNow = !!(job.done||{})[dept]
+    // Strict order: can't mark done unless all prior steps are done. (Un-ticking is always allowed.)
+    if(!isDoneNow && !stepReady(job, dept)){
+      setLoadErr('Complete the previous step first.')
+      setTimeout(()=>setLoadErr(null), 2500)
+      return
+    }
     const done={...(job.done||{})}; done[dept]=!done[dept]
     const updated = {...job, done}
     setJobs(jobs.map(j=>j.id===jobId?updated:j))
@@ -305,7 +381,33 @@ export default function App({ session }) {
     setDirty(true)
   }
 
-  // Reschedule = pull not-started jobs whose start is in the past up to today.
+  const reopenJob = (jobId) => {
+    const job = jobs.find(j=>j.id===jobId); if(!job) return
+    // Reopen = un-tick the last completed step so it's no longer "complete"
+    const phases = jobPhases(job)
+    const done = {...(job.done||{})}
+    for(let i=phases.length-1;i>=0;i--){ if(done[phases[i]]){ done[phases[i]]=false; break } }
+    const updated = {...job, done, reopened:true}
+    setJobs(jobs.map(j=>j.id===jobId?updated:j))
+    updateJob(updated).catch(e=>setLoadErr(e.message))
+    setDirty(true)
+  }
+
+  // Intra-day reorder: drop dragged job before target job within same dept+day.
+  const reorderWithinDay = (dept, day, draggedJobId, targetJobId) => {
+    if(draggedJobId===targetJobId) return
+    const dayJobs = entries.filter(e=>e.dept===dept&&e.date===day).sort((a,b)=>a.s-b.s).map(e=>e.jobId)
+    const uniq = [...new Set(dayJobs)]
+    const existing = daySeq[`${dept}|${day}`] || uniq
+    let order = [...new Set([...(existing||[]), ...uniq])].filter(id=>id!==draggedJobId)
+    const ti = order.indexOf(targetJobId)
+    if(ti<0) order.push(draggedJobId); else order.splice(ti,0,draggedJobId)
+    const key = `${dept}|${day}`
+    setDaySeq({...daySeq, [key]:order})
+    setDaySequenceDb(dept, day, order).catch(e=>setLoadErr(e.message))
+    setDirty(true)
+  }
+
   const rescheduleNow = async () => {
     const changed = []
     const next = jobs.map(j=>{
@@ -345,27 +447,30 @@ export default function App({ session }) {
   const goToday = () => { const d=new Date(); setCursor({y:d.getFullYear(),m:d.getMonth()}); setAnchor(todayStr()) }
   const zoomToDay = date => { setAnchor(date); setView('day') }
 
-  const emptyForm = () => ({ title:'', startDate:TODAY, dueDate:'', materialDate:'', status:'scheduled', priority:'normal', notes:'',
+  const emptyForm = () => ({ title:'', customer:'', subtitle:'', startDate:TODAY, dueDate:'', materialDate:'', status:'scheduled', priority:'normal', notes:'',
     deptMins:Object.fromEntries(DKEYS.map(k=>[k,0])),
     waits:Object.fromEntries(DKEYS.map(k=>[k,{amount:0,unit:'mins'}])),
     resources:Object.fromEntries(DKEYS.map(k=>[k,0])),
     done:Object.fromEntries(DKEYS.map(k=>[k,false])),
-    actual:Object.fromEntries(DKEYS.map(k=>[k,''])) })
+    actual:Object.fromEntries(DKEYS.map(k=>[k,''])),
+    pins:Object.fromEntries(DKEYS.map(k=>[k,''])) })
 
   function openAdd(date){ setForm({...emptyForm(), startDate:date||TODAY}); setEditId(null); setModal('job') }
   function openEdit(id){
     const job = jobs.find(j=>j.id===id); if(!job) return
-    setForm({ title:job.title, startDate:job.startDate, dueDate:job.dueDate||'', materialDate:job.materialDate||'', status:job.status, priority:job.priority||'normal', notes:job.notes||'',
+    setForm({ title:job.title, customer:job.customer||'', subtitle:job.subtitle||'', startDate:job.startDate, dueDate:job.dueDate||'', materialDate:job.materialDate||'', status:job.status, priority:job.priority||'normal', notes:job.notes||'',
       deptMins:{...Object.fromEntries(DKEYS.map(k=>[k,0])),...job.deptMins},
       waits:{...Object.fromEntries(DKEYS.map(k=>[k,{amount:0,unit:'mins'}])),...(job.waits||{})},
       resources:{...Object.fromEntries(DKEYS.map(k=>[k,0])),...(job.resources||{})},
       done:{...Object.fromEntries(DKEYS.map(k=>[k,false])),...(job.done||{})},
-      actual:{...Object.fromEntries(DKEYS.map(k=>[k,''])),...(job.actual||{})} })
+      actual:{...Object.fromEntries(DKEYS.map(k=>[k,''])),...(job.actual||{})},
+      pins:{...Object.fromEntries(DKEYS.map(k=>[k,''])),...(job.pins||{})} })
     setEditId(id); setModal('job')
   }
   async function saveJob(){
     if(!form.title.trim()) return
-    const data = { title:form.title.trim(), startDate:form.startDate, dueDate:form.dueDate, materialDate:form.materialDate, status:form.status, priority:form.priority, notes:form.notes, deptMins:form.deptMins, waits:form.waits, resources:form.resources, done:form.done, actual:form.actual }
+    const cleanPins = {}; for(const k of DKEYS){ if(form.pins[k]) cleanPins[k]=form.pins[k] }
+    const data = { title:form.title.trim(), customer:(form.customer||'').trim(), subtitle:(form.subtitle||'').trim(), startDate:form.startDate, dueDate:form.dueDate, materialDate:form.materialDate, status:form.status, priority:form.priority, notes:form.notes, deptMins:form.deptMins, waits:form.waits, resources:form.resources, done:form.done, actual:form.actual, pins:cleanPins }
     setDirty(true); setModal(null)
     try {
       if(editId!==null){
@@ -383,6 +488,26 @@ export default function App({ session }) {
     try { await deleteJobDb(id) } catch(e){ setLoadErr(e.message) }
   }
   const totalMins = form ? DKEYS.reduce((s,k)=>s+(Number(form.deptMins[k])||0),0) : 0
+
+  // ── Derived lists for pages ──
+  const completedJobs = jobs.filter(isComplete)
+  const lateJobs = jobs
+    .filter(j => !isComplete(j))
+    .map(j => ({ job:j, late:lateness(j) }))
+    .filter(x => x.late.state==='late' || x.late.state==='risk')
+    .sort((a,b)=>{
+      if(a.late.state!==b.late.state) return a.late.state==='late'?-1:1
+      return (b.late.days||0)-(a.late.days||0)
+    })
+  const searchMatches = search.trim()
+    ? jobs.filter(j => {
+        const q = search.trim().toLowerCase()
+        return (j.title||'').toLowerCase().includes(q) || (j.customer||'').toLowerCase().includes(q)
+      })
+    : []
+
+  // current step a job is sitting at (first not-done phase)
+  const currentStep = job => { const p=jobPhases(job); for(const k of p){ if(!(job.done||{})[k]) return k } return null }
 
   return (
     <div className="app">
@@ -412,6 +537,33 @@ export default function App({ session }) {
       )}
 
       <div className="content">
+        {/* Page navigation */}
+        <div className="page-nav">
+          <button className={`page-tab ${page==='planner'?'on':''}`} onClick={()=>setPage('planner')}>Planner</button>
+          <button className={`page-tab ${page==='late'?'on':''}`} onClick={()=>setPage('late')}>
+            Late Jobs {lateJobs.length>0 && <span className="page-badge" style={{background:'#e74c3c'}}>{lateJobs.length}</span>}
+          </button>
+          <button className={`page-tab ${page==='completed'?'on':''}`} onClick={()=>setPage('completed')}>
+            Completed {completedJobs.length>0 && <span className="page-badge" style={{background:'#2ecc71'}}>{completedJobs.length}</span>}
+          </button>
+          <div style={{flex:1}} />
+          <div className="search-box">
+            <input type="text" value={search} placeholder="Search DM number or customer…" onChange={e=>setSearch(e.target.value)} />
+            {search && <button className="search-clear" onClick={()=>setSearch('')}>×</button>}
+            {search && searchMatches.length>0 && (
+              <div className="search-drop">
+                {searchMatches.slice(0,8).map(j=>(
+                  <div key={j.id} className="search-item" onClick={()=>{openEdit(j.id);setSearch('')}}>
+                    <strong>{j.title}</strong>{j.customer&&<span style={{color:'#666'}}> · {j.customer}</span>}{j.subtitle&&<span style={{color:'#aaa'}}> · {j.subtitle}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {search && searchMatches.length===0 && <div className="search-drop"><div className="search-item" style={{color:'#aaa'}}>No matches</div></div>}
+          </div>
+        </div>
+
+        {page==='planner' && (<>
         <div className="toolbar">
           <button className="btn" onClick={navPrev}>‹</button>
           <span className="ml">{headerLabel}</span>
@@ -545,12 +697,17 @@ export default function App({ session }) {
                             return (
                               <div key={i} className="day-block" draggable={!done}
                                    style={{top,height,background:bg,borderLeft:`3px ${!ready&&!done?'dashed':'solid'} ${bl}`,color:txt}}
-                                   title={`${job.title} | ${fmtT(e.s)}–${fmtT(e.e)} | ${fmtM(e.mins)} | ×${e.resources}`}
+                                   title={`${[job.title,job.customer,job.subtitle].filter(Boolean).join(' · ')} | ${fmtT(e.s)}–${fmtT(e.e)} | ${fmtM(e.mins)} | ×${e.resources}\n(drag onto another job in this column to reorder)`}
                                    onClick={ev=>{ev.stopPropagation();openEdit(job.id)}}
-                                   onDragStart={()=>!done&&setDragJob({jobId:job.id,dept:e.dept})} onDragEnd={()=>setDragJob(null)}>
+                                   onDragStart={ev=>{if(!done){ev.stopPropagation();setDragJob({jobId:job.id,dept:e.dept,mode:'reorder'})}}}
+                                   onDragEnd={()=>setDragJob(null)}
+                                   onDragOver={ev=>{ if(dragJob&&dragJob.mode==='reorder'&&dragJob.dept===dp.key&&dragJob.jobId!==job.id){ev.preventDefault();ev.currentTarget.classList.add('reorder-target')} }}
+                                   onDragLeave={ev=>ev.currentTarget.classList.remove('reorder-target')}
+                                   onDrop={ev=>{ ev.currentTarget.classList.remove('reorder-target'); if(dragJob&&dragJob.mode==='reorder'&&dragJob.dept===dp.key&&dragJob.jobId!==job.id){ev.stopPropagation();reorderWithinDay(dp.key,date,dragJob.jobId,job.id);setDragJob(null)} }}>
                                 <div style={{display:'flex',alignItems:'center',gap:3}}>
-                                  <span className="tick" style={{position:'static'}} onClick={ev=>{ev.stopPropagation();toggleDone(job.id,e.dept)}}>{done?'✓':'○'}</span>
+                                  <span className="tick" style={{position:'static',cursor:ready||done?'pointer':'not-allowed'}} onClick={ev=>{ev.stopPropagation();toggleDone(job.id,e.dept)}}>{done?'✓':'○'}</span>
                                   <strong style={{fontSize:10,overflow:'hidden',textOverflow:'ellipsis'}}>{job.title}</strong>
+                                  {job.customer && <span style={{fontSize:9,opacity:.8,overflow:'hidden',textOverflow:'ellipsis'}}>· {job.customer}</span>}
                                   {e.resources>1 && <span style={{background:bl,color:'#fff',borderRadius:2,padding:'0 3px',fontSize:8,fontWeight:700}}>×{e.resources}</span>}
                                 </div>
                                 <div style={{fontSize:8,opacity:.7}}>{fmtT(e.s)}–{fmtT(e.e)}</div>
@@ -567,6 +724,75 @@ export default function App({ session }) {
             </>
           )
         })()}
+        </>)}
+
+        {/* ───── LATE JOBS PAGE ───── */}
+        {page==='late' && (
+          <div className="page-body">
+            {(() => {
+              const list = search.trim() ? lateJobs.filter(x=>searchMatches.some(m=>m.id===x.job.id)) : lateJobs
+              if(list.length===0) return <div className="empty-note">🎉 No late or at-risk jobs. Everything's on track.</div>
+              return (
+                <table className="list-tbl">
+                  <thead><tr><th>Status</th><th>DM Number</th><th>Customer</th><th>Sub-title</th><th>Priority</th><th>Due</th><th>Projected finish</th><th>Currently at</th></tr></thead>
+                  <tbody>
+                    {list.map(({job,late})=>{
+                      const cs = currentStep(job)
+                      const csDept = cs ? deptOf(cs) : null
+                      return (
+                        <tr key={job.id} onClick={()=>openEdit(job.id)} style={{cursor:'pointer'}}>
+                          <td><span className="state-pill" style={{background:late.state==='late'?'#FCEBEB':'#FFF3DC',color:late.state==='late'?'#7a1e1e':'#633806'}}>{late.state==='late'?`⚠ ${late.days}d late`:'At risk'}</span></td>
+                          <td><strong>{job.title}</strong></td>
+                          <td>{job.customer||'—'}</td>
+                          <td style={{color:'#888'}}>{job.subtitle||'—'}</td>
+                          <td><span style={{color:PRIORITY[job.priority||'normal'].color,fontWeight:600,fontSize:11}}>{PRIORITY[job.priority||'normal'].label}</span></td>
+                          <td>{job.dueDate?parseD(job.dueDate).toLocaleDateString('en-GB',{day:'numeric',month:'short'}):'—'}</td>
+                          <td>{late.finish?parseD(late.finish).toLocaleDateString('en-GB',{day:'numeric',month:'short'}):'—'}</td>
+                          <td>{csDept?<span style={{color:csDept.color,fontWeight:600,fontSize:11}}>{csDept.label}</span>:'—'}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )
+            })()}
+          </div>
+        )}
+
+        {/* ───── COMPLETED PAGE ───── */}
+        {page==='completed' && (
+          <div className="page-body">
+            {(() => {
+              const list = search.trim() ? completedJobs.filter(j=>searchMatches.some(m=>m.id===j.id)) : completedJobs
+              if(list.length===0) return <div className="empty-note">No completed jobs yet. Tick every step of a job to complete it.</div>
+              return (
+                <table className="list-tbl">
+                  <thead><tr><th>DM Number</th><th>Customer</th><th>Sub-title</th><th>Est. total</th><th>Actual total</th><th>Variance</th><th></th></tr></thead>
+                  <tbody>
+                    {list.map(job=>{
+                      const phases = jobPhases(job)
+                      const est = phases.reduce((s,k)=>s+(Number(job.deptMins[k])||0),0)
+                      const act = phases.reduce((s,k)=>s+(Number((job.actual||{})[k])|| Number(job.deptMins[k])||0),0)
+                      const variance = act-est
+                      const hasActuals = phases.some(k=>(job.actual||{})[k])
+                      return (
+                        <tr key={job.id} onClick={()=>openEdit(job.id)} style={{cursor:'pointer'}}>
+                          <td><strong>{job.title}</strong></td>
+                          <td>{job.customer||'—'}</td>
+                          <td style={{color:'#888'}}>{job.subtitle||'—'}</td>
+                          <td>{fmtM(est)}</td>
+                          <td>{hasActuals?fmtM(act):<span style={{color:'#aaa'}}>not logged</span>}</td>
+                          <td>{hasActuals?<span style={{color:variance>0?'#c0392b':'#1a5c2e',fontWeight:600}}>{variance>0?'+':''}{fmtM(Math.abs(variance))} {variance>0?'over':variance<0?'under':'on est.'}</span>:'—'}</td>
+                          <td><button className="btn" style={{padding:'3px 10px',fontSize:11,borderColor:'#BA7517',color:'#BA7517'}} onClick={ev=>{ev.stopPropagation();reopenJob(job.id)}}>Reopen</button></td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )
+            })()}
+          </div>
+        )}
       </div>
 
       {/* Capacity modal */}
@@ -623,8 +849,12 @@ export default function App({ session }) {
             <div className="mh"><h2>{editId!==null?'Edit Job':'New Job'}</h2><button className="x" onClick={()=>setModal(null)}>×</button></div>
             <div className="mb">
               <div className="fr2">
-                <div><label className="lbl">Job title</label><input type="text" value={form.title} placeholder="e.g. Control Panel Enclosure" onChange={e=>setForm({...form,title:e.target.value})} /></div>
+                <div><label className="lbl">DM Number</label><input type="text" value={form.title} placeholder="e.g. DM12345" onChange={e=>setForm({...form,title:e.target.value})} /></div>
                 <div><label className="lbl">Priority</label><select value={form.priority} onChange={e=>setForm({...form,priority:e.target.value})}>{Object.entries(PRIORITY).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select></div>
+              </div>
+              <div className="fr2" style={{marginTop:8}}>
+                <div><label className="lbl">Customer</label><input type="text" value={form.customer} placeholder="e.g. Acme Ltd" onChange={e=>setForm({...form,customer:e.target.value})} /></div>
+                <div><label className="lbl">Sub-title <span style={{textTransform:'none',fontWeight:400,color:'#aaa'}}>(optional)</span></label><input type="text" value={form.subtitle} placeholder="e.g. Balustrade" onChange={e=>setForm({...form,subtitle:e.target.value})} /></div>
               </div>
               <div className="fr3" style={{marginTop:8}}>
                 <div><label className="lbl">Start date</label><input type="date" value={form.startDate} onChange={e=>setForm({...form,startDate:e.target.value})} /></div>
@@ -633,8 +863,8 @@ export default function App({ session }) {
               </div>
               <div className="stitle">Departments — time, wait, resources &amp; completion</div>
               <div className="sbox">
-                <table className="dtbl" style={{minWidth:480}}>
-                  <thead><tr><th>Dept</th><th style={{width:54}}>Est. min</th><th style={{width:96}}>Wait after</th><th style={{width:48}}>Res</th><th style={{width:40}}>Done</th><th style={{width:54}}>Actual</th></tr></thead>
+                <table className="dtbl" style={{minWidth:600}}>
+                  <thead><tr><th>Dept</th><th style={{width:54}}>Est. min</th><th style={{width:96}}>Wait after</th><th style={{width:48}}>Res</th><th style={{width:40}}>Done</th><th style={{width:54}}>Actual</th><th style={{width:130}}>Pin start 📌</th></tr></thead>
                   <tbody>
                     {DEPTS.map(d=>{
                       const w=form.waits[d.key]||{amount:0,unit:'mins'}, mx=resOf(d.key)
@@ -649,6 +879,10 @@ export default function App({ session }) {
                           <td><input type="number" min="0" max={mx} value={form.resources[d.key]||''} placeholder="1" onChange={e=>setForm({...form,resources:{...form.resources,[d.key]:parseInt(e.target.value)||0}})} style={{width:40,textAlign:'center'}} /></td>
                           <td style={{textAlign:'center'}}><input type="checkbox" checked={!!form.done[d.key]} onChange={e=>setForm({...form,done:{...form.done,[d.key]:e.target.checked}})} style={{width:'auto'}} /></td>
                           <td><input type="number" min="0" value={form.actual[d.key]||''} placeholder="–" onChange={e=>setForm({...form,actual:{...form.actual,[d.key]:parseInt(e.target.value)||''}})} style={{width:48,textAlign:'right'}} /></td>
+                          <td><div style={{display:'flex',gap:2,alignItems:'center'}}>
+                            <input type="date" value={form.pins[d.key]||''} onChange={e=>setForm({...form,pins:{...form.pins,[d.key]:e.target.value}})} style={{width:108,fontSize:10}} />
+                            {form.pins[d.key] && <button type="button" title="Clear pin" onClick={()=>setForm({...form,pins:{...form.pins,[d.key]:''}})} style={{border:'none',background:'none',color:'#c0392b',cursor:'pointer',fontWeight:700,fontSize:13,padding:0}}>×</button>}
+                          </div></td>
                         </tr>
                       )
                     })}
@@ -661,6 +895,7 @@ export default function App({ session }) {
             </div>
             <div className="mf">
               {editId!==null && <button className="btn-del" onClick={()=>deleteJob(editId)}>Delete</button>}
+              {editId!==null && isComplete(jobs.find(j=>j.id===editId)||{deptMins:{}}) && <button className="btn" style={{borderColor:'#BA7517',color:'#BA7517'}} onClick={()=>{reopenJob(editId);setModal(null)}}>Reopen job</button>}
               <button className="btn" onClick={()=>setModal(null)}>Cancel</button>
               <button className="btn-green" onClick={saveJob}>Save Job</button>
             </div>
