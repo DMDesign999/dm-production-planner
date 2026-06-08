@@ -5,7 +5,7 @@
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Open Sans',sans-serif;background:var(--bg);color:var(--text);font-size:13px}
 button{cursor:pointer;font-family:'Open Sans',sans-serif}
-
+ 
 .app{display:flex;flex-direction:column;min-height:100vh}
 .hdr{background:var(--dark);padding:0 16px;display:flex;align-items:center;gap:10px;height:56px;flex-shrink:0}
 .hdr img{height:38px;width:auto}
@@ -14,7 +14,7 @@ button{cursor:pointer;font-family:'Open Sans',sans-serif}
 .hdr-right{color:var(--grey);font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;margin-left:auto}
 .hdr-right span{color:var(--green)}
 .content{flex:1;padding:16px}
-
+ 
 .toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
 .btn{background:#fff;border:1px solid var(--border);border-radius:4px;padding:6px 12px;color:var(--text);font-size:12px;font-weight:500}
 .btn:hover{border-color:var(--blue);color:var(--blue)}
@@ -25,16 +25,16 @@ button{cursor:pointer;font-family:'Open Sans',sans-serif}
 .btn-del{background:none;border:1px solid #f5c0c0;border-radius:4px;padding:6px 12px;color:#c0392b;font-size:12px}
 .btn-del:hover{background:#fef5f5}
 .ml{font-size:15px;font-weight:700;min-width:150px;text-align:center}
-
+ 
 .tabs{display:flex;flex-wrap:wrap;border-bottom:2px solid var(--border);margin-bottom:12px}
 .tab{background:none;border:none;border-bottom:2px solid transparent;margin-bottom:-2px;padding:6px 12px;font-size:10px;font-weight:700;color:#999;letter-spacing:.05em;text-transform:uppercase}
 .tab:hover{color:var(--dark)}
 .tab.on{color:var(--dark)}
-
+ 
 .legend{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px;align-items:center}
 .li{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted)}
 .li-dot{width:8px;height:8px;border-radius:50%}
-
+ 
 .cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border-left:1px solid var(--border);border-top:1px solid var(--border);background:#fff;border-radius:0 0 6px 6px}
 .dhdr{font-size:10px;color:#999;text-align:center;padding:6px 0;background:#fafafa;border-right:1px solid var(--border);border-bottom:1px solid var(--border);font-weight:700;letter-spacing:.06em;text-transform:uppercase}
 .cell{border-right:1px solid var(--border);border-bottom:1px solid var(--border);padding:5px;cursor:pointer;min-height:112px}
@@ -50,7 +50,7 @@ button{cursor:pointer;font-family:'Open Sans',sans-serif}
 .pill{font-size:9px;border-radius:2px;padding:2px 5px;margin-bottom:2px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:3px;border-left:2px solid transparent}
 .pill:hover{opacity:.8}
 .sd{width:5px;height:5px;border-radius:50%;flex-shrink:0}
-
+ 
 .mwrap{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-start;justify-content:center;padding:24px 12px;z-index:100;overflow-y:auto}
 .mbox{background:#fff;border-radius:6px;width:540px;max-width:100%;box-shadow:0 8px 32px rgba(0,0,0,.2)}
 .mh{background:var(--dark);color:#fff;padding:14px 18px;border-radius:6px 6px 0 0;display:flex;align-items:center;justify-content:space-between}
@@ -63,7 +63,7 @@ input,select,textarea{width:100%;border:1px solid var(--border);border-radius:4p
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue)}
 textarea{height:48px;resize:vertical}
 .fr2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-
+ 
 .dtbl{width:100%;border-collapse:collapse;font-size:11px}
 .dtbl th{font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#888;padding:5px 6px;background:#f5f5f5;border-bottom:1px solid #eee;text-align:left}
 .dtbl td{padding:4px 5px;border-bottom:1px solid #f0f0f0;vertical-align:middle}
@@ -72,18 +72,18 @@ textarea{height:48px;resize:vertical}
 .tr{border-top:1px solid #eee;margin-top:6px;padding-top:6px;font-size:11px;font-weight:700;display:flex;justify-content:space-between;color:var(--muted)}
 .stitle{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#888;margin:14px 0 6px;padding-bottom:4px;border-bottom:1px solid #eee}
 .tag{background:#E1F5EE;color:#085041;font-size:9px;border-radius:2px;padding:0 4px;font-weight:700;letter-spacing:.03em}
-
+ 
 /* ── View toggle ── */
 .vtoggle{display:flex;border:1px solid var(--border);border-radius:4px;overflow:hidden;background:#fff;margin-left:4px}
 .vtab{background:none;border:none;padding:6px 12px;font-size:12px;font-weight:500;color:var(--muted)}
 .vtab:hover{background:#f4f4f4}
 .vtab.on{background:var(--dark);color:#fff;font-weight:600}
-
+ 
 /* ── Month cell tweaks ── */
 .cell-top{display:flex;align-items:center;justify-content:space-between}
 .zoom-btn{background:none;border:none;color:#bbb;font-size:12px;cursor:pointer;padding:0 2px;line-height:1}
 .zoom-btn:hover{color:var(--blue)}
-
+ 
 /* ── Week view ── */
 .week-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;align-items:start}
 .week-col{background:#fff;border:1px solid var(--border);border-radius:6px;overflow:hidden;min-height:200px;display:flex;flex-direction:column}
@@ -96,7 +96,7 @@ textarea{height:48px;resize:vertical}
 .week-dnum.now{background:var(--green);color:#fff}
 .week-body{padding:6px;flex:1;cursor:pointer;min-height:120px}
 .wknd-note{font-size:11px;color:#bbb;text-align:center;padding:20px 6px;font-style:italic}
-
+ 
 /* ── Day view ── */
 .day-wrap{background:#fff;border:1px solid var(--border);border-radius:6px;overflow:auto}
 .day-grid{display:grid;position:relative}
@@ -109,38 +109,38 @@ textarea{height:48px;resize:vertical}
 .day-lane:hover .day-slot{background:#fcfffc}
 .day-block{position:absolute;left:2px;right:2px;border-radius:3px;border-left:3px solid;padding:3px 4px;overflow:hidden;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.08)}
 .day-block:hover{opacity:.85;z-index:5}
-
+ 
 /* ── Reschedule banner ── */
 .reschedule-banner{background:#FFF3DC;border-bottom:1px solid #EF9F27;padding:8px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px;color:#633806;font-weight:600}
-
+ 
 /* ── Tick / completion ── */
 .tick{cursor:pointer;font-size:11px;flex-shrink:0;color:#999;font-weight:700;width:12px;display:inline-flex;justify-content:center}
 .tick:hover{color:#2ecc71}
 .fr3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
-
+ 
 /* ── Priority dot ── */
 .prio-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
-
+ 
 /* ── Due chip ── */
 .due-chip{font-size:9px;border-radius:3px;padding:1px 5px;font-weight:700;white-space:nowrap}
-
+ 
 /* ── Availability summary bar ── */
 .avail-bar{display:flex;flex-wrap:wrap;gap:8px;background:#fff;border:1px solid var(--border);border-top:none;border-radius:0 0 6px 6px;padding:8px 10px;margin-top:-1px}
 .avail-item{display:flex;align-items:center;gap:4px;font-size:10px;background:#fafafa;border:1px solid #eee;border-radius:4px;padding:3px 7px}
 .avail-dot{width:7px;height:7px;border-radius:2px;flex-shrink:0}
 .avail-lbl{font-weight:600;color:#555}
 .avail-val{font-weight:700}
-
+ 
 /* pill drag affordance */
 .pill[draggable=true]{cursor:grab}
 .pill[draggable=true]:active{cursor:grabbing}
-
+ 
 /* ── Header user / sign-out ── */
 .hdr-right{display:flex;align-items:center;gap:10px;margin-left:auto}
 .hdr-user{color:var(--grey);font-size:12px;font-weight:400}
 .hdr-signout{background:rgba(255,255,255,.12);border:none;color:#fff;border-radius:4px;padding:5px 12px;font-size:12px;font-weight:600}
 .hdr-signout:hover{background:rgba(255,255,255,.22)}
-
+ 
 /* ── Login screen ── */
 .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:#282828;padding:20px}
 .login-card{background:#fff;border-radius:10px;padding:32px;width:380px;max-width:100%;box-shadow:0 12px 40px rgba(0,0,0,.3)}
@@ -154,3 +154,36 @@ textarea{height:48px;resize:vertical}
 .login-switch{margin-top:18px;font-size:13px;color:#666;text-align:center}
 .login-switch button{background:none;border:none;color:#3B74BF;font-weight:600;cursor:pointer;font-size:13px;text-decoration:underline;padding:0}
 .login-note{margin-top:14px;font-size:11px;color:#aaa;text-align:center}
+ 
+/* ── Page navigation ── */
+.page-nav{display:flex;align-items:center;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+.page-tab{background:none;border:1px solid var(--border);border-radius:6px;padding:7px 16px;font-size:13px;font-weight:600;color:var(--muted)}
+.page-tab:hover{border-color:var(--blue);color:var(--blue)}
+.page-tab.on{background:#282828;color:#fff;border-color:#282828}
+.page-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:9px;color:#fff;font-size:10px;font-weight:700;padding:0 5px;margin-left:4px}
+ 
+/* ── Search box ── */
+.search-box{position:relative;width:280px;max-width:50vw}
+.search-box input{width:100%;border:1px solid var(--border);border-radius:6px;padding:7px 28px 7px 10px;font-size:13px}
+.search-clear{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;color:#aaa;font-size:16px;cursor:pointer;padding:0 4px}
+.search-drop{position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid var(--border);border-radius:6px;margin-top:4px;box-shadow:0 6px 20px rgba(0,0,0,.12);z-index:50;overflow:hidden}
+.search-item{padding:8px 10px;font-size:13px;cursor:pointer;border-bottom:1px solid #f4f4f4}
+.search-item:last-child{border-bottom:none}
+.search-item:hover{background:#f0faf3}
+ 
+/* ── List pages (Late / Completed) ── */
+.page-body{background:#fff;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.list-tbl{width:100%;border-collapse:collapse;font-size:13px}
+.list-tbl th{text-align:left;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#888;padding:10px 12px;background:#fafafa;border-bottom:1px solid var(--border)}
+.list-tbl td{padding:10px 12px;border-bottom:1px solid #f2f2f2}
+.list-tbl tr:hover td{background:#fafffb}
+.list-tbl tr:last-child td{border-bottom:none}
+.state-pill{font-size:11px;font-weight:700;border-radius:4px;padding:2px 8px;white-space:nowrap}
+.empty-note{padding:40px;text-align:center;color:#888;font-size:14px}
+ 
+/* ── Completed pill hatch ── */
+.pill-complete{background-image:repeating-linear-gradient(45deg,rgba(46,204,113,.08),rgba(46,204,113,.08) 4px,transparent 4px,transparent 8px)!important}
+ 
+/* ── Day-view reorder drop hint ── */
+.day-block.reorder-target{outline:2px dashed #3B74BF;outline-offset:-2px}
+ 
