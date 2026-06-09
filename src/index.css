@@ -187,3 +187,36 @@ textarea{height:48px;resize:vertical}
 /* ── Day-view reorder drop hint ── */
 .day-block.reorder-target{outline:2px dashed #3B74BF;outline-offset:-2px}
  
+/* ── Redesigned job form ── */
+.mbox-wide{width:620px}
+.form-section{margin-bottom:18px}
+.section-head{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#888;padding-bottom:6px;margin-bottom:10px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.section-total{font-size:12px;font-weight:700;color:#282828;text-transform:none;letter-spacing:0}
+.opt{text-transform:none;font-weight:400;color:#aaa}
+.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.field label.lbl{margin-top:0}
+.no-steps{font-size:13px;color:#999;background:#fafafa;border:1px dashed var(--border);border-radius:8px;padding:16px;text-align:center}
+ 
+/* step cards */
+.step-cards{display:flex;flex-direction:column;gap:10px}
+.step-card{border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.step-card-head{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#fafafa;border-bottom:1px solid var(--border)}
+.step-card-head strong{font-size:13px}
+.step-dot{width:10px;height:10px;border-radius:3px;flex-shrink:0}
+.step-remove{margin-left:auto;border:none;background:none;color:#c0392b;font-size:12px;cursor:pointer;font-weight:600}
+.step-remove:hover{text-decoration:underline}
+.step-inputs{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;padding:12px}
+.step-field{display:flex;flex-direction:column;gap:3px}
+.step-field label{font-size:11px;color:var(--muted);font-weight:600}
+.step-field input,.step-field select{padding:6px 8px}
+.step-hint{font-size:10px;color:#aaa}
+.pin-clear{border:none;background:none;color:#c0392b;font-weight:700;font-size:16px;cursor:pointer;padding:0 4px}
+.step-progress{display:flex;align-items:center;gap:14px;padding:8px 12px;background:#f0faf3;border-top:1px dashed #bfe3c9;flex-wrap:wrap}
+.progress-lbl{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#2c6e3c}
+.done-toggle{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:#282828;cursor:pointer}
+.done-toggle input{width:auto}
+.step-field-inline{display:flex;align-items:center;gap:6px}
+.step-field-inline label{font-size:11px;color:var(--muted);font-weight:600}
+.step-field-inline input{width:64px;padding:4px 6px}
+.add-step-row{margin-top:10px}
+.add-step-row select{width:100%;padding:8px 10px;border:1px dashed var(--blue);border-radius:8px;color:var(--blue);font-weight:600;background:#f7faff;cursor:pointer}
