@@ -96,10 +96,10 @@ export default function App({ session }) {
   // Refs so the realtime callback always sees current values (avoids stale closures)
   const modalRef = useRef(null)
   const pendingRefresh = useRef(false)
+  const refreshTimer = useRef(null)
   useEffect(() => { modalRef.current = modal }, [modal])
 
-  async function refresh() {
-    // Don't disrupt the user mid-entry: if a modal/dialog is open, defer the reload.
+  async function doRefresh() {
     if (modalRef.current) { pendingRefresh.current = true; return }
     try {
       const { jobs:j, capacity:c, deptRes:r, daySeq:s } = await loadAll()
@@ -115,11 +115,17 @@ export default function App({ session }) {
     }
   }
 
+  // Debounced: collapse rapid realtime events into a single reload after a pause.
+  function refresh() {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current)
+    refreshTimer.current = setTimeout(() => { refreshTimer.current = null; doRefresh() }, 600)
+  }
+
   // When a modal closes, run any refresh that was deferred while it was open.
   useEffect(() => {
     if (!modal && pendingRefresh.current) {
       pendingRefresh.current = false
-      refresh()
+      doRefresh()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modal])
@@ -128,7 +134,7 @@ export default function App({ session }) {
     let active = true
     ;(async () => {
       try { await seedIfEmpty(Object.fromEntries(DEPTS.map(d=>[d.key,d.res]))) } catch {}
-      if (active) await refresh()
+      if (active) await doRefresh()
     })()
     const channel = supabase
       .channel('planner-changes')
@@ -137,7 +143,7 @@ export default function App({ session }) {
       .on('postgres_changes', { event:'*', schema:'public', table:'dept_resources' }, () => refresh())
       .on('postgres_changes', { event:'*', schema:'public', table:'day_sequence' }, () => refresh())
       .subscribe()
-    return () => { active = false; supabase.removeChannel(channel) }
+    return () => { active = false; if (refreshTimer.current) clearTimeout(refreshTimer.current); supabase.removeChannel(channel) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -469,7 +475,8 @@ export default function App({ session }) {
     resources:Object.fromEntries(DKEYS.map(k=>[k,0])),
     done:Object.fromEntries(DKEYS.map(k=>[k,false])),
     actual:Object.fromEntries(DKEYS.map(k=>[k,''])),
-    pins:Object.fromEntries(DKEYS.map(k=>[k,''])) })
+    pins:Object.fromEntries(DKEYS.map(k=>[k,''])),
+    steps:[] })
 
   function openAdd(date){ setForm({...emptyForm(), startDate:date||TODAY}); setEditId(null); setModal('job') }
   function openEdit(id){
@@ -480,7 +487,8 @@ export default function App({ session }) {
       resources:{...Object.fromEntries(DKEYS.map(k=>[k,0])),...(job.resources||{})},
       done:{...Object.fromEntries(DKEYS.map(k=>[k,false])),...(job.done||{})},
       actual:{...Object.fromEntries(DKEYS.map(k=>[k,''])),...(job.actual||{})},
-      pins:{...Object.fromEntries(DKEYS.map(k=>[k,''])),...(job.pins||{})} })
+      pins:{...Object.fromEntries(DKEYS.map(k=>[k,''])),...(job.pins||{})},
+      steps:DKEYS.filter(k => (job.deptMins?.[k]||0)>0 || job.pins?.[k] || job.done?.[k] || job.actual?.[k]) })
     setEditId(id); setModal('job')
   }
   async function saveJob(){
@@ -815,7 +823,7 @@ export default function App({ session }) {
       {modal==='cap' && capEdit && (() => {
         const [dk,ds]=capEdit.split('|'), dp=deptOf(dk), res=resOf(dk)
         return (
-          <div className="mwrap" onClick={()=>setModal(null)}>
+          <div className="mwrap" onClick={e=>{ if(e.target===e.currentTarget) setModal(null) }}>
             <div className="mbox" onClick={e=>e.stopPropagation()}>
               <div className="mh"><h2>Capacity — {dp.label}</h2><button className="x" onClick={()=>setModal(null)}>×</button></div>
               <div className="mb">
@@ -836,7 +844,7 @@ export default function App({ session }) {
 
       {/* Resources modal */}
       {modal==='resources' && (
-        <div className="mwrap" onClick={()=>setModal(null)}>
+        <div className="mwrap" onClick={e=>{ if(e.target===e.currentTarget) setModal(null) }}>
           <div className="mbox" onClick={e=>e.stopPropagation()}>
             <div className="mh"><h2>Department Resources</h2><button className="x" onClick={()=>setModal(null)}>×</button></div>
             <div className="mb">
@@ -861,14 +869,14 @@ export default function App({ session }) {
       {/* Job modal */}
       {modal==='job' && form && (() => {
         const isEditing = editId!==null
-        // departments currently "in use" = have minutes, or (when editing) any with data
-        const usedDepts = DEPTS.filter(d => (form.deptMins[d.key]||0)>0 || form.pins[d.key] || (isEditing && (form.done[d.key]||form.actual[d.key])))
-        // keep them in canonical process order
-        const orderedUsed = DEPTS.filter(d=>usedDepts.includes(d))
-        const unusedDepts = DEPTS.filter(d=>!usedDepts.includes(d))
-        const addStep = key => setForm({...form, deptMins:{...form.deptMins, [key]: form.deptMins[key]||1}})
+        const activeSteps = form.steps || []
+        // show cards for explicitly-added steps, kept in canonical process order
+        const orderedUsed = DEPTS.filter(d=>activeSteps.includes(d.key))
+        const unusedDepts = DEPTS.filter(d=>!activeSteps.includes(d.key))
+        const addStep = key => setForm({...form, steps:[...activeSteps, key], deptMins:{...form.deptMins, [key]: form.deptMins[key]||0}})
         const removeStep = key => setForm({
           ...form,
+          steps:activeSteps.filter(k=>k!==key),
           deptMins:{...form.deptMins,[key]:0},
           waits:{...form.waits,[key]:{amount:0,unit:'mins'}},
           resources:{...form.resources,[key]:0},
@@ -877,7 +885,7 @@ export default function App({ session }) {
           actual:{...form.actual,[key]:''},
         })
         return (
-        <div className="mwrap" onClick={()=>setModal(null)}>
+        <div className="mwrap" onClick={e=>{ if(e.target===e.currentTarget) setModal(null) }}>
           <div className="mbox mbox-wide" onClick={e=>e.stopPropagation()}>
             <div className="mh"><h2>{isEditing?'Edit Job':'New Job'}</h2><button className="x" onClick={()=>setModal(null)}>×</button></div>
             <div className="mb">
