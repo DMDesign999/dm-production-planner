@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from './supabaseClient'
 import { loadAll, insertJob, updateJob, deleteJobDb, setCapacityDb, clearCapacityDb, setDeptResDb, seedIfEmpty, setDaySequenceDb } from './data'
 
@@ -93,7 +93,14 @@ export default function App({ session }) {
   const [dirty, setDirty] = useState(false)
   const [dragJob, setDragJob] = useState(null) // {jobId, dept}
 
+  // Refs so the realtime callback always sees current values (avoids stale closures)
+  const modalRef = useRef(null)
+  const pendingRefresh = useRef(false)
+  useEffect(() => { modalRef.current = modal }, [modal])
+
   async function refresh() {
+    // Don't disrupt the user mid-entry: if a modal/dialog is open, defer the reload.
+    if (modalRef.current) { pendingRefresh.current = true; return }
     try {
       const { jobs:j, capacity:c, deptRes:r, daySeq:s } = await loadAll()
       setJobsRaw(j.map(migrateJob))
@@ -107,6 +114,15 @@ export default function App({ session }) {
       setLoading(false)
     }
   }
+
+  // When a modal closes, run any refresh that was deferred while it was open.
+  useEffect(() => {
+    if (!modal && pendingRefresh.current) {
+      pendingRefresh.current = false
+      refresh()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modal])
 
   useEffect(() => {
     let active = true
