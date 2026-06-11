@@ -53,7 +53,7 @@ function migrateJob(job){
     return out
   }
   return {
-    priority:'normal', dueDate:'', customer:'', subtitle:'', reopened:false, overlaps:{},
+    priority:'normal', dueDate:'', customer:'', subtitle:'', reopened:false, overlaps:{}, stepNotes:{},
     ...job,
     deptMins:remap(job.deptMins),
     waits:remap(job.waits),
@@ -100,6 +100,7 @@ export default function App({ session }) {
   const [dirty, setDirty] = useState(false)
   const [dragJob, setDragJob] = useState(null) // {jobId, dept}
   const [deptDraft, setDeptDraft] = useState([]) // working copy of departments while editing settings
+  const [openNote, setOpenNote] = useState(null) // {jobId, dept} whose notes are pinned open
 
   // Refs so the realtime callback always sees current values (avoids stale closures)
   const modalRef = useRef(null)
@@ -161,6 +162,14 @@ export default function App({ session }) {
     return () => { active = false; if (refreshTimer.current) clearTimeout(refreshTimer.current); supabase.removeChannel(channel) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Close any pinned note popover when clicking elsewhere
+  useEffect(() => {
+    if(!openNote) return
+    const close = () => setOpenNote(null)
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [openNote])
 
   const TODAY = todayStr()
   const capOf = (dk,date) => (capacity[dk]||{})[date] ?? DEF_CAP
@@ -272,15 +281,25 @@ export default function App({ session }) {
         // For overlap "respect partial feed": this step can't get ahead of the previous step's output.
         const prevDept = pi>0 ? phases[pi-1] : null
         const ovActive = prevDept && (job.overlaps||{})[dk] && ((job.overlaps[dk].mode==='time')||(job.overlaps[dk].mode==='pct')) && phaseSpan[prevDept]
+        // Safety guards against runaway loops (huge jobs / overlap feed starvation):
+        let iterGuard = 0
+        const MAX_ITER = 100000          // absolute cap on inner iterations
+        let emptyDays = 0
+        const MAX_EMPTY_DAYS = 750       // ~3 years of weekdays with no progress → bail
         while(remMM>0){
+          if(++iterGuard > MAX_ITER) break
+          if(emptyDays > MAX_EMPTY_DAYS) break
           if(isWknd(cur.date)){ cur={date:addDays(cur.date,1),min:WD}; continue }
-          const usedMM = ents.filter(e=>e.dept===dk&&e.date===cur.date).reduce((s,e)=>s+e.manMins,0)
+          // Cache this dept+date's entries once per iteration (avoids scanning all entries repeatedly)
+          const dayE = []
+          let usedMM = 0
+          for(const en of ents){ if(en.dept===dk && en.date===cur.date){ dayE.push(en); usedMM += en.manMins } }
+          dayE.sort((a,b)=>a.s-b.s)
           const availMM = Math.max(0, manCap(dk,cur.date)-usedMM)
-          if(availMM<=0){ cur={date:addDays(cur.date,1),min:WD}; continue }
-          const dayE = ents.filter(e=>e.dept===dk&&e.date===cur.date).sort((a,b)=>a.s-b.s)
+          if(availMM<=0){ cur={date:addDays(cur.date,1),min:WD}; emptyDays++; continue }
           let ss = Math.max(cur.min, WD), dayEnd = WD+capOf(dk,cur.date)
           for(const e of dayE){ if(e.e<=ss) continue; if(e.s<=ss) ss=e.e }
-          if(ss>=dayEnd){ cur={date:addDays(cur.date,1),min:WD}; continue }
+          if(ss>=dayEnd){ cur={date:addDays(cur.date,1),min:WD}; emptyDays++; continue }
           let se = dayEnd
           for(const e of dayE){ if(e.s>ss) se=Math.min(se,e.s) }
           // Respect partial feed: cap how much we can do by how much the previous step
@@ -296,10 +315,17 @@ export default function App({ session }) {
             const total = (job.actual?.[dk] && job.done?.[dk]) ? job.actual[dk] : job.deptMins[dk]
             const alreadyDone = total - remMM
             feedCap = Math.max(0, produced - alreadyDone)
-            if(feedCap<=0){ cur={date:addDays(cur.date,1),min:WD}; continue }
+            // If the upstream step is fully scheduled and we've consumed all it produced,
+            // stop overlapping and just finish normally (prevents infinite day-skipping).
+            const prevEnd = span.endDate
+            if(feedCap<=0){
+              if(prevEnd && cur.date >= prevEnd){ feedCap = Infinity /* upstream done; no more feed limit */ }
+              else { cur={date:addDays(cur.date,1),min:WD}; emptyDays++; continue }
+            }
           }
           const takeMM = Math.min(remMM, (se-ss)*actualRes, availMM, feedCap)
-          if(takeMM<=0){ cur={date:addDays(cur.date,1),min:WD}; continue }
+          if(takeMM<=0){ cur={date:addDays(cur.date,1),min:WD}; emptyDays++; continue }
+          emptyDays = 0
           const wallUsed = Math.ceil(takeMM/actualRes)
           const ent = { jobId:job.id, dept:dk, date:cur.date, s:ss, e:ss+wallUsed, mins:wallUsed, resources:actualRes, manMins:takeMM, done:isDone, phaseIndex:pi }
           ents.push(ent); myEntries.push(ent)
@@ -402,6 +428,28 @@ export default function App({ session }) {
     return <span className="due-chip" style={{background:late?'#FCEBEB':'#EAF3DE',color:late?'#7a1e1e':'#1a5c2e'}}>{late?'⚠ ':''}Due {parseD(job.dueDate).toLocaleString('default',{day:'numeric',month:'short'})}</span>
   }
 
+  // Renders the note/warning icon(s) for a job's step, with hover + click-to-pin popover.
+  const noteBadge = (job, dept) => {
+    const notes = (job.stepNotes||{})[dept] || []
+    if(!notes.length) return null
+    const hasWarn = notes.some(n=>n.type==='warning')
+    const hasNote = notes.some(n=>n.type!=='warning')
+    const isOpen = openNote && openNote.jobId===job.id && openNote.dept===dept
+    return (
+      <span className="note-badge" onClick={ev=>{ev.stopPropagation(); setOpenNote(isOpen?null:{jobId:job.id,dept})}}>
+        {hasWarn && <span className="nb-ic warn" title="Has a warning">⚠</span>}
+        {hasNote && <span className="nb-ic note" title="Has a note">🗒</span>}
+        <span className={`note-pop${isOpen?' pinned':''}`} onClick={ev=>ev.stopPropagation()}>
+          {notes.map((n,idx)=>(
+            <span key={idx} className={`note-pop-item ${n.type==='warning'?'warning':'note'}`}>
+              <b>{n.type==='warning'?'⚠ ':'🗒 '}</b>{n.text}
+            </span>
+          ))}
+        </span>
+      </span>
+    )
+  }
+
   const jobPill = (e, i, withTime=true) => {
     const job=jobs.find(j=>j.id===e.jobId); if(!job) return null
     const dp=deptOf(e.dept)
@@ -443,6 +491,7 @@ export default function App({ session }) {
           {job.subtitle && <span style={{opacity:.6}}> · {job.subtitle}</span>}
         </span>
         {e.resources>1 && <span style={{background:bl,color:'#fff',borderRadius:2,padding:'0 3px',fontSize:8,fontWeight:700,flexShrink:0}}>×{e.resources}</span>}
+        {noteBadge(job, e.dept)}
         {withTime && <span style={{opacity:.6,fontSize:8,flexShrink:0}}>{fmtT(e.s)}</span>}
       </div>
     )
@@ -565,6 +614,7 @@ export default function App({ session }) {
     actual:Object.fromEntries(DKEYS.map(k=>[k,''])),
     pins:Object.fromEntries(DKEYS.map(k=>[k,''])),
     overlaps:Object.fromEntries(DKEYS.map(k=>[k,{mode:'standard',amount:0,unit:'mins'}])),
+    stepNotes:{},
     steps:[] })
 
   function openAdd(date){ setForm({...emptyForm(), startDate:date||TODAY}); setEditId(null); setModalOpenId(n=>n+1); setModal('job') }
@@ -578,6 +628,7 @@ export default function App({ session }) {
       actual:{...Object.fromEntries(DKEYS.map(k=>[k,''])),...(job.actual||{})},
       pins:{...Object.fromEntries(DKEYS.map(k=>[k,''])),...(job.pins||{})},
       overlaps:{...Object.fromEntries(DKEYS.map(k=>[k,{mode:'standard',amount:0,unit:'mins'}])),...(job.overlaps||{})},
+      stepNotes:{...(job.stepNotes||{})},
       steps:DKEYS.filter(k => (job.deptMins?.[k]||0)>0 || job.pins?.[k] || job.done?.[k] || job.actual?.[k]) })
     setEditId(id); setModalOpenId(n=>n+1); setModal('job')
   }
@@ -586,7 +637,8 @@ export default function App({ session }) {
     if(!f.title.trim()) return
     const cleanPins = {}; for(const k of DKEYS){ if(f.pins[k]) cleanPins[k]=f.pins[k] }
     const cleanOverlaps = {}; for(const k of DKEYS){ const o=f.overlaps?.[k]; if(o && o.mode && o.mode!=='standard') cleanOverlaps[k]=o }
-    const data = { title:f.title.trim(), customer:(f.customer||'').trim(), subtitle:(f.subtitle||'').trim(), startDate:f.startDate, dueDate:f.dueDate, materialDate:f.materialDate, status:f.status||'scheduled', priority:f.priority, notes:f.notes, deptMins:f.deptMins, waits:f.waits, resources:f.resources, done:f.done, actual:f.actual, pins:cleanPins, overlaps:cleanOverlaps }
+    const cleanNotes = {}; for(const k of DKEYS){ const arr=(f.stepNotes?.[k]||[]).filter(n=>n&&n.text&&n.text.trim()); if(arr.length) cleanNotes[k]=arr.map(n=>({type:n.type==='warning'?'warning':'note',text:n.text.trim()})) }
+    const data = { title:f.title.trim(), customer:(f.customer||'').trim(), subtitle:(f.subtitle||'').trim(), startDate:f.startDate, dueDate:f.dueDate, materialDate:f.materialDate, status:f.status||'scheduled', priority:f.priority, notes:f.notes, deptMins:f.deptMins, waits:f.waits, resources:f.resources, done:f.done, actual:f.actual, pins:cleanPins, overlaps:cleanOverlaps, stepNotes:cleanNotes }
     setDirty(true); setModal(null)
     try {
       if(editId!==null){
@@ -838,7 +890,9 @@ export default function App({ session }) {
                                   <strong style={{fontSize:10,overflow:'hidden',textOverflow:'ellipsis'}}>{job.title}</strong>
                                   {job.customer && <span style={{fontSize:9,opacity:.8,overflow:'hidden',textOverflow:'ellipsis'}}>· {job.customer}</span>}
                                   {e.resources>1 && <span style={{background:bl,color:'#fff',borderRadius:2,padding:'0 3px',fontSize:8,fontWeight:700}}>×{e.resources}</span>}
+                                  {noteBadge(job, e.dept)}
                                 </div>
+                                {job.subtitle && <div style={{fontSize:8,opacity:.7,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{job.subtitle}</div>}
                                 <div style={{fontSize:8,opacity:.7}}>{fmtT(e.s)}–{fmtT(e.e)}</div>
                               </div>
                             )
