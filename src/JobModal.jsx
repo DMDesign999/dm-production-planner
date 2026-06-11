@@ -26,7 +26,16 @@ export default function JobModal({ depts, dkeys, priority, today, isEditing, ini
   const unusedDepts = depts.filter(d => !activeSteps.includes(d.key))
   const totalMins = dkeys.reduce((s,k)=>s+(Number(form.deptMins[k])||0),0)
 
-  const addStep = key => setForm(f => ({ ...f, steps:[...(f.steps||[]), key], deptMins:{...f.deptMins, [key]: f.deptMins[key]||0} }))
+  const addStep = key => setForm(f => ({
+    ...f,
+    steps:[...(f.steps||[]), key],
+    deptMins:{...f.deptMins, [key]: f.deptMins[key]||0},
+    waits:{...f.waits, [key]: f.waits?.[key] || {amount:0,unit:'mins'}},
+    resources:{...f.resources, [key]: f.resources?.[key]||0},
+    pins:{...f.pins, [key]: f.pins?.[key]||''},
+    done:{...f.done, [key]: f.done?.[key]||false},
+    actual:{...f.actual, [key]: f.actual?.[key]||''},
+  }))
   const removeStep = key => setForm(f => ({
     ...f,
     steps:(f.steps||[]).filter(k=>k!==key),
@@ -71,7 +80,13 @@ export default function JobModal({ depts, dkeys, priority, today, isEditing, ini
 
             <div className="step-cards">
               {orderedUsed.map(d=>{
-                const w=form.waits[d.key]||{amount:0,unit:'mins'}, mx=resOf(d.key)
+                const w=(form.waits && form.waits[d.key]) || {amount:0,unit:'mins'}
+                const mx=resOf(d.key)
+                const minsVal = (form.deptMins && form.deptMins[d.key]) || ''
+                const resVal = (form.resources && form.resources[d.key]) || ''
+                const pinVal = (form.pins && form.pins[d.key]) || ''
+                const doneVal = !!(form.done && form.done[d.key])
+                const actualVal = (form.actual && form.actual[d.key]) || ''
                 return (
                   <div key={d.key} className="step-card">
                     <div className="step-card-head">
@@ -83,25 +98,25 @@ export default function JobModal({ depts, dkeys, priority, today, isEditing, ini
                     <div className="step-inputs">
                       <div className="step-field">
                         <label>Time needed (minutes)</label>
-                        <input type="number" min="0" value={form.deptMins[d.key]||''} placeholder="0" onChange={e=>setForm(f=>({...f,deptMins:{...f.deptMins,[d.key]:parseInt(e.target.value)||0}}))} />
+                        <input type="number" min="0" value={minsVal} placeholder="0" onChange={e=>setForm(f=>({...f,deptMins:{...f.deptMins,[d.key]:parseInt(e.target.value)||0}}))} />
                       </div>
                       <div className="step-field">
                         <label>People / machines on it</label>
-                        <input type="number" min="1" max={mx} value={form.resources[d.key]||''} placeholder="1" onChange={e=>setForm(f=>({...f,resources:{...f.resources,[d.key]:parseInt(e.target.value)||0}}))} />
+                        <input type="number" min="1" max={mx} value={resVal} placeholder="1" onChange={e=>setForm(f=>({...f,resources:{...f.resources,[d.key]:parseInt(e.target.value)||0}}))} />
                         <span className="step-hint">of {mx} available</span>
                       </div>
                       <div className="step-field">
                         <label>Wait before next step</label>
                         <div style={{display:'flex',gap:4}}>
-                          <input type="number" min="0" value={w.amount||''} placeholder="0" onChange={e=>setForm(f=>({...f,waits:{...f.waits,[d.key]:{...(f.waits[d.key]||{unit:'mins'}),amount:parseInt(e.target.value)||0}}}))} />
-                          <select value={w.unit} onChange={e=>setForm(f=>({...f,waits:{...f.waits,[d.key]:{...(f.waits[d.key]||{amount:0}),unit:e.target.value}}}))}><option value="mins">mins</option><option value="hours">hours</option><option value="days">days</option></select>
+                          <input type="number" min="0" value={w.amount||''} placeholder="0" onChange={e=>setForm(f=>({...f,waits:{...f.waits,[d.key]:{...((f.waits&&f.waits[d.key])||{unit:'mins'}),amount:parseInt(e.target.value)||0}}}))} />
+                          <select value={w.unit||'mins'} onChange={e=>setForm(f=>({...f,waits:{...f.waits,[d.key]:{...((f.waits&&f.waits[d.key])||{amount:0}),unit:e.target.value}}}))}><option value="mins">mins</option><option value="hours">hours</option><option value="days">days</option></select>
                         </div>
                       </div>
                       <div className="step-field">
                         <label>Pin earliest start 📌 <span className="opt">(optional)</span></label>
                         <div style={{display:'flex',gap:4,alignItems:'center'}}>
-                          <input type="date" value={form.pins[d.key]||''} onChange={e=>setForm(f=>({...f,pins:{...f.pins,[d.key]:e.target.value}}))} />
-                          {form.pins[d.key] && <button type="button" title="Clear pin" className="pin-clear" onClick={()=>setForm(f=>({...f,pins:{...f.pins,[d.key]:''}}))}>×</button>}
+                          <input type="date" value={pinVal} onChange={e=>setForm(f=>({...f,pins:{...f.pins,[d.key]:e.target.value}}))} />
+                          {pinVal && <button type="button" title="Clear pin" className="pin-clear" onClick={()=>setForm(f=>({...f,pins:{...f.pins,[d.key]:''}}))}>×</button>}
                         </div>
                       </div>
                     </div>
@@ -110,12 +125,12 @@ export default function JobModal({ depts, dkeys, priority, today, isEditing, ini
                       <div className="step-progress">
                         <span className="progress-lbl">Shop-floor progress:</span>
                         <label className="done-toggle">
-                          <input type="checkbox" checked={!!form.done[d.key]} onChange={e=>setForm(f=>({...f,done:{...f.done,[d.key]:e.target.checked}}))} />
+                          <input type="checkbox" checked={doneVal} onChange={e=>setForm(f=>({...f,done:{...f.done,[d.key]:e.target.checked}}))} />
                           Done
                         </label>
                         <span className="step-field-inline">
                           <label>Actual mins taken</label>
-                          <input type="number" min="0" value={form.actual[d.key]||''} placeholder="–" onChange={e=>setForm(f=>({...f,actual:{...f.actual,[d.key]:parseInt(e.target.value)||''}}))} />
+                          <input type="number" min="0" value={actualVal} placeholder="–" onChange={e=>setForm(f=>({...f,actual:{...f.actual,[d.key]:parseInt(e.target.value)||''}}))} />
                         </span>
                       </div>
                     )}
