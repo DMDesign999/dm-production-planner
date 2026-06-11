@@ -21,12 +21,6 @@ const DEPT_PALETTE = ['#185FA5','#0F6E56','#854F0B','#533AB7','#993556','#3B6D11
 // Back-compat: old data used 'secondary' for what is now 'machining'
 const LEGACY_MAP = { secondary:'machining' }
 const DEFAULT_DKEYS = DEFAULT_DEPTS.map(d => d.key)
-const STATUS = {
-  scheduled:{dot:'#3B74BF',label:'Scheduled'},
-  in_progress:{dot:'#39BF5B',label:'In Progress'},
-  done:{dot:'#2ecc71',label:'Done'},
-  delayed:{dot:'#e74c3c',label:'Delayed'},
-}
 const PRIORITY = {
   high:{label:'High', rank:0, color:'#e74c3c'},
   normal:{label:'Normal', rank:1, color:'#3B74BF'},
@@ -434,13 +428,13 @@ export default function App({ session }) {
            onDragStart={()=>!done&&!complete&&setDragJob({jobId:job.id,dept:e.dept})}
            onDragEnd={()=>setDragJob(null)}>
         {!complete && (
-          <span className="tick" onClick={ev=>{ev.stopPropagation();toggleDone(job.id,e.dept)}}
-                title={ready?'Mark this step done':'Complete the previous step first'}
-                style={{color: done?'#2ecc71':ready?'#999':'#ccc', cursor: ready||done?'pointer':'not-allowed'}}>
-            {done?'✓':'○'}
+          <span className={`mark ${done?'mark-done':ready?'mark-ready':'mark-wait'}`}
+                onClick={ev=>{ev.stopPropagation();toggleDone(job.id,e.dept)}}
+                title={done?'Done — tap to undo':ready?'Tap to mark done':'Waiting on previous step'}>
+            {done && <svg viewBox="0 0 16 16" width="12" height="12"><path d="M4 8.5l2.5 2.5L12 5.5" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
           </span>
         )}
-        {complete && <span style={{fontSize:8,flexShrink:0,fontWeight:700,color:'#2c6e3c'}}>✓</span>}
+        {complete && <span className="mark mark-done" title="Job complete"><svg viewBox="0 0 16 16" width="12" height="12"><path d="M4 8.5l2.5 2.5L12 5.5" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg></span>}
         {pinned && <span style={{fontSize:8,flexShrink:0}} title="Pinned start">📌</span>}
         {job.priority==='high' && !complete && <span className="prio-dot" style={{background:prio.color}} title="High priority" />}
         <span style={{overflow:'hidden',textOverflow:'ellipsis',flex:1,fontWeight:600,textDecoration:(done||complete)?'line-through':'none',opacity:complete?0.7:1}}>
@@ -688,7 +682,7 @@ export default function App({ session }) {
         {page==='planner' && (<>
         <div className="toolbar">
           <button className="btn" onClick={navPrev}>‹</button>
-          <span className="ml">{headerLabel}</span>
+          <span className="ml date-label">{headerLabel}</span>
           <button className="btn" onClick={navNext}>›</button>
           <button className="btn" onClick={goToday}>Today</button>
           <div className="vtoggle">
@@ -702,10 +696,10 @@ export default function App({ session }) {
         </div>
 
         <div className="legend">
-          {Object.entries(STATUS).map(([k,v])=>(<span className="li" key={k}><span className="li-dot" style={{background:v.dot}} />{v.label}</span>))}
-          <span className="li"><span className="tick" style={{position:'static'}}>○</span>not done</span>
-          <span className="li"><span className="tick" style={{position:'static',color:'#2ecc71'}}>✓</span>done</span>
-          <span style={{fontSize:10,color:'#aaa'}}>Tap ○ to complete · drag a job later to delay · grey = waiting on previous step</span>
+          <span className="li"><span className="mark mark-wait" style={{position:'static'}} />waiting</span>
+          <span className="li"><span className="mark mark-ready" style={{position:'static'}} />ready to do</span>
+          <span className="li"><span className="mark mark-done" style={{position:'static'}}><svg viewBox="0 0 16 16" width="11" height="11"><path d="M4 8.5l2.5 2.5L12 5.5" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg></span>done</span>
+          <span style={{fontSize:10,color:'#aaa'}}>Tap the ring to mark a step done · drag a job later to delay</span>
         </div>
 
         <div className="tabs">
@@ -838,7 +832,9 @@ export default function App({ session }) {
                                    onDragLeave={ev=>ev.currentTarget.classList.remove('reorder-target')}
                                    onDrop={ev=>{ ev.currentTarget.classList.remove('reorder-target'); if(dragJob&&dragJob.mode==='reorder'&&dragJob.dept===dp.key&&dragJob.jobId!==job.id){ev.stopPropagation();reorderWithinDay(dp.key,date,dragJob.jobId,job.id);setDragJob(null)} }}>
                                 <div style={{display:'flex',alignItems:'center',gap:3}}>
-                                  <span className="tick" style={{position:'static',cursor:ready||done?'pointer':'not-allowed'}} onClick={ev=>{ev.stopPropagation();toggleDone(job.id,e.dept)}}>{done?'✓':'○'}</span>
+                                  <span className={`mark ${done?'mark-done':ready?'mark-ready':'mark-wait'}`} onClick={ev=>{ev.stopPropagation();toggleDone(job.id,e.dept)}} title={done?'Done — tap to undo':ready?'Tap to mark done':'Waiting on previous step'}>
+                                    {done && <svg viewBox="0 0 16 16" width="11" height="11"><path d="M4 8.5l2.5 2.5L12 5.5" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                                  </span>
                                   <strong style={{fontSize:10,overflow:'hidden',textOverflow:'ellipsis'}}>{job.title}</strong>
                                   {job.customer && <span style={{fontSize:9,opacity:.8,overflow:'hidden',textOverflow:'ellipsis'}}>· {job.customer}</span>}
                                   {e.resources>1 && <span style={{background:bl,color:'#fff',borderRadius:2,padding:'0 3px',fontSize:8,fontWeight:700}}>×{e.resources}</span>}
