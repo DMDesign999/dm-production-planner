@@ -432,17 +432,18 @@ export default function App({ session }) {
   const noteBadge = (job, dept) => {
     const notes = (job.stepNotes||{})[dept] || []
     if(!notes.length) return null
-    const hasWarn = notes.some(n=>n.type==='warning')
-    const hasNote = notes.some(n=>n.type!=='warning')
+    const warns = notes.filter(n=>n.type==='warning')
+    const plainNotes = notes.filter(n=>n.type!=='warning')
     const isOpen = openNote && openNote.jobId===job.id && openNote.dept===dept
     return (
-      <span className="note-badge" onClick={ev=>{ev.stopPropagation(); setOpenNote(isOpen?null:{jobId:job.id,dept})}}>
-        {hasWarn && <span className="nb-ic warn" title="Has a warning">⚠</span>}
-        {hasNote && <span className="nb-ic note" title="Has a note">🗒</span>}
-        <span className={`note-pop${isOpen?' pinned':''}`} onClick={ev=>ev.stopPropagation()}>
+      <span className={`note-badge${isOpen?' open':''}`} onClick={ev=>{ev.stopPropagation(); setOpenNote(isOpen?null:{jobId:job.id,dept})}}>
+        {warns.length>0 && <span className="nb-ic warn">⚠{warns.length>1?<sup>{warns.length}</sup>:''}</span>}
+        {plainNotes.length>0 && <span className="nb-ic note">🗒{plainNotes.length>1?<sup>{plainNotes.length}</sup>:''}</span>}
+        <span className="note-pop" onClick={ev=>ev.stopPropagation()}>
           {notes.map((n,idx)=>(
             <span key={idx} className={`note-pop-item ${n.type==='warning'?'warning':'note'}`}>
-              <b>{n.type==='warning'?'⚠ ':'🗒 '}</b>{n.text}
+              <span className="npi-ic">{n.type==='warning'?'⚠':'🗒'}</span>
+              <span className="npi-text">{n.text}</span>
             </span>
           ))}
         </span>
