@@ -92,6 +92,7 @@ export default function App({ session }) {
   const [capEdit, setCapEdit] = useState(null)
   const [capVal, setCapVal] = useState('')
   const [form, setForm] = useState(null)
+  const [modalOpenId, setModalOpenId] = useState(0) // increments each open → unique key so JobModal always remounts fresh
   const [dirty, setDirty] = useState(false)
   const [dragJob, setDragJob] = useState(null) // {jobId, dept}
 
@@ -542,7 +543,7 @@ export default function App({ session }) {
     overlaps:Object.fromEntries(DKEYS.map(k=>[k,{mode:'standard',amount:0,unit:'mins'}])),
     steps:[] })
 
-  function openAdd(date){ setForm({...emptyForm(), startDate:date||TODAY}); setEditId(null); setModal('job') }
+  function openAdd(date){ setForm({...emptyForm(), startDate:date||TODAY}); setEditId(null); setModalOpenId(n=>n+1); setModal('job') }
   function openEdit(id){
     const job = jobs.find(j=>j.id===id); if(!job) return
     setForm({ title:job.title, customer:job.customer||'', subtitle:job.subtitle||'', startDate:job.startDate, dueDate:job.dueDate||'', materialDate:job.materialDate||'', status:job.status, priority:job.priority||'normal', notes:job.notes||'',
@@ -554,7 +555,7 @@ export default function App({ session }) {
       pins:{...Object.fromEntries(DKEYS.map(k=>[k,''])),...(job.pins||{})},
       overlaps:{...Object.fromEntries(DKEYS.map(k=>[k,{mode:'standard',amount:0,unit:'mins'}])),...(job.overlaps||{})},
       steps:DKEYS.filter(k => (job.deptMins?.[k]||0)>0 || job.pins?.[k] || job.done?.[k] || job.actual?.[k]) })
-    setEditId(id); setModal('job')
+    setEditId(id); setModalOpenId(n=>n+1); setModal('job')
   }
   async function saveJob(formData){
     const f = formData || form
@@ -948,7 +949,7 @@ export default function App({ session }) {
       {modal==='job' && form && (
         <ErrorBoundary onClose={()=>setModal(null)}>
         <JobModal
-          key={editId===null ? 'new' : `edit-${editId}`}
+          key={`jobmodal-${modalOpenId}`}
           depts={DEPTS}
           dkeys={DKEYS}
           priority={PRIORITY}
