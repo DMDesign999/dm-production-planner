@@ -53,16 +53,18 @@ export function jobToRow(j) {
 
 // ─── Load everything ───
 export async function loadAll() {
-  const [jobsRes, capRes, resRes, seqRes] = await Promise.all([
+  const [jobsRes, capRes, resRes, seqRes, deptRes2] = await Promise.all([
     supabase.from('jobs').select('*').order('id'),
     supabase.from('capacity').select('*'),
     supabase.from('dept_resources').select('*'),
     supabase.from('day_sequence').select('*'),
+    supabase.from('departments').select('*').order('sort_order'),
   ])
   if (jobsRes.error) throw jobsRes.error
   if (capRes.error) throw capRes.error
   if (resRes.error) throw resRes.error
   if (seqRes.error) throw seqRes.error
+  if (deptRes2.error) throw deptRes2.error
 
   const jobs = (jobsRes.data || []).map(rowToJob)
 
@@ -75,11 +77,40 @@ export async function loadAll() {
   const deptRes = {}
   for (const r of resRes.data || []) deptRes[r.dept] = r.count
 
-  // day_sequence rows {dept, day, job_ids[]} → { "dept|day": [ids] }
   const daySeq = {}
   for (const s of seqRes.data || []) daySeq[`${s.dept}|${s.day}`] = s.job_ids || []
 
-  return { jobs, capacity, deptRes, daySeq }
+  // departments: full editable config
+  const departments = (deptRes2.data || []).map(d => ({
+    key: d.key, label: d.label, color: d.color, bg: d.bg, text: d.text,
+    res: d.res, enabled: d.enabled !== false, sortOrder: d.sort_order ?? 0,
+  }))
+
+  return { jobs, capacity, deptRes, daySeq, departments }
+}
+
+// ─── Departments CRUD ───
+export async function saveDepartmentsDb(depts) {
+  // upsert all departments with their current order/enabled/label/etc.
+  const rows = depts.map((d,i) => ({
+    key: d.key, label: d.label, color: d.color, bg: d.bg, text: d.text,
+    res: d.res, enabled: d.enabled !== false, sort_order: i,
+  }))
+  const { error } = await supabase.from('departments').upsert(rows)
+  if (error) throw error
+}
+
+export async function seedDepartmentsIfEmpty(defaultDepts) {
+  const { data, error } = await supabase.from('departments').select('key')
+  if (error) throw error
+  if ((data || []).length === 0) {
+    const rows = defaultDepts.map((d,i) => ({
+      key: d.key, label: d.label, color: d.color, bg: d.bg, text: d.text,
+      res: d.res, enabled: true, sort_order: i,
+    }))
+    const { error: e2 } = await supabase.from('departments').upsert(rows)
+    if (e2) throw e2
+  }
 }
 
 export async function setDaySequenceDb(dept, day, jobIds) {
