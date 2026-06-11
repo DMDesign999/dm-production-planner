@@ -306,7 +306,23 @@ export default function App({ session }) {
       }
       finish[job.id] = lastEnd
     }
-    return { entries:ents, jobFinish:finish }
+
+    // Merge contiguous slices: same job+dept+date where one ends where the next
+    // starts (and same resource count) collapse into one block. Keeps the maths
+    // correct but draws clean, continuous bars instead of many tiny fragments.
+    ents.sort((a,b)=> a.jobId-b.jobId || (a.dept<b.dept?-1:a.dept>b.dept?1:0) || (a.date<b.date?-1:a.date>b.date?1:0) || a.s-b.s)
+    const merged = []
+    for(const e of ents){
+      const last = merged[merged.length-1]
+      if(last && last.jobId===e.jobId && last.dept===e.dept && last.date===e.date && last.resources===e.resources && last.done===e.done && last.e===e.s){
+        last.e = e.e
+        last.mins += e.mins
+        last.manMins += e.manMins
+      } else {
+        merged.push({...e})
+      }
+    }
+    return { entries:merged, jobFinish:finish }
   }, [jobs, capacity, deptRes, daySeq])
 
 
