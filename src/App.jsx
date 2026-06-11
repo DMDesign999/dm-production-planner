@@ -57,7 +57,7 @@ function migrateJob(job){
     return out
   }
   return {
-    priority:'normal', dueDate:'', customer:'', subtitle:'', reopened:false,
+    priority:'normal', dueDate:'', customer:'', subtitle:'', reopened:false, overlaps:{},
     ...job,
     deptMins:remap(job.deptMins),
     waits:remap(job.waits),
@@ -99,12 +99,16 @@ export default function App({ session }) {
   const modalRef = useRef(null)
   const pendingRefresh = useRef(false)
   const refreshTimer = useRef(null)
-  useEffect(() => { modalRef.current = modal }, [modal])
+  // Keep modalRef in sync immediately on every render (not deferred via effect),
+  // so an in-flight refresh always sees the current modal state.
+  modalRef.current = modal
 
   async function doRefresh() {
     if (modalRef.current) { pendingRefresh.current = true; return }
     try {
       const { jobs:j, capacity:c, deptRes:r, daySeq:s } = await loadAll()
+      // Re-check AFTER the await: if a modal opened while loading, don't disrupt it.
+      if (modalRef.current) { pendingRefresh.current = true; return }
       setJobsRaw(j.map(migrateJob))
       setCapacity(c)
       if (Object.keys(r).length) setDeptRes(r)
@@ -203,6 +207,8 @@ export default function App({ session }) {
       let cur = { date:job.startDate, min:WD }
       while(isWknd(cur.date)) cur = { date:addDays(cur.date,1), min:WD }
       let lastEnd = null
+      // Track each phase's scheduled span so a later phase can overlap it.
+      const phaseSpan = {} // dept -> { startDate, startMin, endDate, endMin, entries:[...] }
       for(let pi=0; pi<phases.length; pi++){
         const dk = phases[pi]
         const isDone = !!(job.done||{})[dk]
@@ -211,8 +217,38 @@ export default function App({ session }) {
           while(isWknd(cur.date)) cur = { date:addDays(cur.date,1), min:WD }
         }
         if(pi>0){
-          const wm = waitMins((job.waits||{})[phases[pi-1]]||{})
-          if(wm>0){ cur = advCursor(cur,wm); if(isWknd(cur.date)) cur = { date:nextWd(cur.date), min:WD } }
+          const prevDept = phases[pi-1]
+          // Overlap: this step may start after X of the previous step (time or %).
+          // Default 'standard' = start after previous fully finishes.
+          const ov = (job.overlaps||{})[dk] // {mode:'standard'|'time'|'pct', amount, unit}
+          if(ov && (ov.mode==='time' || ov.mode==='pct') && phaseSpan[prevDept]){
+            const span = phaseSpan[prevDept]
+            // total man-mins of previous step
+            const prevTotalMM = (job.actual?.[prevDept] && job.done?.[prevDept]) ? job.actual[prevDept] : job.deptMins[prevDept]
+            // how many man-mins of the previous step must be done before this can start
+            let triggerMM
+            if(ov.mode==='pct') triggerMM = prevTotalMM * (Math.min(100,Math.max(0,ov.amount||0))/100)
+            else { // time = wall-clock minutes into the previous step
+              const prevRes = (job.resources?.[prevDept]>0) ? Math.min(job.resources[prevDept], resOf(prevDept)) : 1
+              triggerMM = (ov.unit==='hours' ? (ov.amount||0)*60 : (ov.amount||0)) * prevRes
+            }
+            // find the point in the previous step's entries where triggerMM is reached
+            let acc=0, startCur=null
+            for(const e of span.entries){
+              if(acc+e.manMins >= triggerMM){
+                const frac = (triggerMM-acc)/e.manMins
+                const into = Math.ceil((e.e-e.s)*frac)
+                startCur = { date:e.date, min:e.s+into }
+                break
+              }
+              acc+=e.manMins
+            }
+            if(startCur){ cur = startCur; while(isWknd(cur.date)) cur={date:addDays(cur.date,1),min:WD} }
+          } else {
+            // standard: after previous finishes (+ optional wait)
+            const wm = waitMins((job.waits||{})[phases[pi-1]]||{})
+            if(wm>0){ cur = advCursor(cur,wm); if(isWknd(cur.date)) cur = { date:nextWd(cur.date), min:WD } }
+          }
         }
         const pin = (job.pins||{})[dk]
         if(pin && pin>cur.date){
@@ -222,6 +258,11 @@ export default function App({ session }) {
         const jr = (job.resources||{})[dk]||0
         const actualRes = jr>0 ? Math.min(jr, resOf(dk)) : 1
         let remMM = ((job.actual||{})[dk] && isDone) ? job.actual[dk] : job.deptMins[dk]
+        const myEntries = []
+        let spanStart = null, spanEnd = null
+        // For overlap "respect partial feed": this step can't get ahead of the previous step's output.
+        const prevDept = pi>0 ? phases[pi-1] : null
+        const ovActive = prevDept && (job.overlaps||{})[dk] && ((job.overlaps[dk].mode==='time')||(job.overlaps[dk].mode==='pct')) && phaseSpan[prevDept]
         while(remMM>0){
           if(isWknd(cur.date)){ cur={date:addDays(cur.date,1),min:WD}; continue }
           const usedMM = ents.filter(e=>e.dept===dk&&e.date===cur.date).reduce((s,e)=>s+e.manMins,0)
@@ -233,20 +274,40 @@ export default function App({ session }) {
           if(ss>=dayEnd){ cur={date:addDays(cur.date,1),min:WD}; continue }
           let se = dayEnd
           for(const e of dayE){ if(e.s>ss) se=Math.min(se,e.s) }
-          const takeMM = Math.min(remMM, (se-ss)*actualRes, availMM)
+          // Respect partial feed: cap how much we can do by how much the previous step
+          // has produced up to this (date,time) point.
+          let feedCap = Infinity
+          if(ovActive){
+            const span = phaseSpan[prevDept]
+            let produced = 0
+            for(const e of span.entries){
+              if(e.date < cur.date || (e.date===cur.date && e.e<=ss)) produced += e.manMins
+              else if(e.date===cur.date && e.s<ss){ produced += e.manMins * ((ss-e.s)/(e.e-e.s)) }
+            }
+            const total = (job.actual?.[dk] && job.done?.[dk]) ? job.actual[dk] : job.deptMins[dk]
+            const alreadyDone = total - remMM
+            feedCap = Math.max(0, produced - alreadyDone)
+            if(feedCap<=0){ cur={date:addDays(cur.date,1),min:WD}; continue }
+          }
+          const takeMM = Math.min(remMM, (se-ss)*actualRes, availMM, feedCap)
           if(takeMM<=0){ cur={date:addDays(cur.date,1),min:WD}; continue }
           const wallUsed = Math.ceil(takeMM/actualRes)
-          ents.push({ jobId:job.id, dept:dk, date:cur.date, s:ss, e:ss+wallUsed, mins:wallUsed, resources:actualRes, manMins:takeMM, done:isDone, phaseIndex:pi })
+          const ent = { jobId:job.id, dept:dk, date:cur.date, s:ss, e:ss+wallUsed, mins:wallUsed, resources:actualRes, manMins:takeMM, done:isDone, phaseIndex:pi }
+          ents.push(ent); myEntries.push(ent)
+          if(!spanStart) spanStart={date:cur.date,min:ss}
+          spanEnd={date:cur.date,min:ss+wallUsed}
           remMM -= takeMM
           cur = { date:cur.date, min:ss+wallUsed }
           if(cur.min>=dayEnd && remMM>0) cur = { date:addDays(cur.date,1), min:WD }
         }
+        phaseSpan[dk] = { startDate:spanStart?.date, startMin:spanStart?.min, endDate:spanEnd?.date, endMin:spanEnd?.min, entries:myEntries }
         lastEnd = cur.date
       }
       finish[job.id] = lastEnd
     }
     return { entries:ents, jobFinish:finish }
   }, [jobs, capacity, deptRes, daySeq])
+
 
   // step ready = all prior steps done
   const stepReady = (job, dept) => {
@@ -478,6 +539,7 @@ export default function App({ session }) {
     done:Object.fromEntries(DKEYS.map(k=>[k,false])),
     actual:Object.fromEntries(DKEYS.map(k=>[k,''])),
     pins:Object.fromEntries(DKEYS.map(k=>[k,''])),
+    overlaps:Object.fromEntries(DKEYS.map(k=>[k,{mode:'standard',amount:0,unit:'mins'}])),
     steps:[] })
 
   function openAdd(date){ setForm({...emptyForm(), startDate:date||TODAY}); setEditId(null); setModal('job') }
@@ -490,6 +552,7 @@ export default function App({ session }) {
       done:{...Object.fromEntries(DKEYS.map(k=>[k,false])),...(job.done||{})},
       actual:{...Object.fromEntries(DKEYS.map(k=>[k,''])),...(job.actual||{})},
       pins:{...Object.fromEntries(DKEYS.map(k=>[k,''])),...(job.pins||{})},
+      overlaps:{...Object.fromEntries(DKEYS.map(k=>[k,{mode:'standard',amount:0,unit:'mins'}])),...(job.overlaps||{})},
       steps:DKEYS.filter(k => (job.deptMins?.[k]||0)>0 || job.pins?.[k] || job.done?.[k] || job.actual?.[k]) })
     setEditId(id); setModal('job')
   }
@@ -497,7 +560,8 @@ export default function App({ session }) {
     const f = formData || form
     if(!f.title.trim()) return
     const cleanPins = {}; for(const k of DKEYS){ if(f.pins[k]) cleanPins[k]=f.pins[k] }
-    const data = { title:f.title.trim(), customer:(f.customer||'').trim(), subtitle:(f.subtitle||'').trim(), startDate:f.startDate, dueDate:f.dueDate, materialDate:f.materialDate, status:f.status||'scheduled', priority:f.priority, notes:f.notes, deptMins:f.deptMins, waits:f.waits, resources:f.resources, done:f.done, actual:f.actual, pins:cleanPins }
+    const cleanOverlaps = {}; for(const k of DKEYS){ const o=f.overlaps?.[k]; if(o && o.mode && o.mode!=='standard') cleanOverlaps[k]=o }
+    const data = { title:f.title.trim(), customer:(f.customer||'').trim(), subtitle:(f.subtitle||'').trim(), startDate:f.startDate, dueDate:f.dueDate, materialDate:f.materialDate, status:f.status||'scheduled', priority:f.priority, notes:f.notes, deptMins:f.deptMins, waits:f.waits, resources:f.resources, done:f.done, actual:f.actual, pins:cleanPins, overlaps:cleanOverlaps }
     setDirty(true); setModal(null)
     try {
       if(editId!==null){
@@ -624,14 +688,25 @@ export default function App({ session }) {
             {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=><div className="dhdr" key={d}>{d}</div>)}
             {monthDays().map(({date,inM})=>{
               const isT=date===TODAY, wknd=isWknd(date)
+              // Proportional fill: overall capacity utilisation across shown depts this day
+              let dUsed=0, dTot=0
+              if(inM && !wknd){ for(const dp of show){ dUsed += entries.filter(e=>e.dept===dp.key&&e.date===date).reduce((s,e)=>s+e.manMins,0); dTot += manCap(dp.key,date) } }
+              const fillPct = dTot>0 ? Math.min(100, Math.round((dUsed/dTot)*100)) : 0
+              const fillColor = fillPct>100?'#FCEBEB':fillPct>85?'#fde9cf':fillPct>50?'#eaf5ed':'#f1f8f3'
               return (
                 <div key={date} className={`cell${!inM?' other':''}${isT?' tod':''}${wknd?' wknd':''}`}
                      onClick={()=>openAdd(date)}
                      onDragOver={e=>{if(dragJob&&!wknd)e.preventDefault()}}
                      onDrop={()=>!wknd&&onDropDate(date)}>
+                  {inM && !wknd && dTot>0 && (
+                    <div className="cell-fill" style={{height:`${fillPct}%`,background:fillColor}} title={`${fillPct}% of day's capacity used`} />
+                  )}
                   <div className="cell-top">
                     <span className={`dn${isT?' now':''}`}>{parseD(date).getDate()}</span>
-                    {inM && !wknd && <button className="zoom-btn" title="Open this day" onClick={e=>{e.stopPropagation();zoomToDay(date)}}>⤢</button>}
+                    <span style={{display:'flex',alignItems:'center',gap:4}}>
+                      {inM && !wknd && dTot>0 && <span className="fill-pct" style={{color:fillPct>100?'#c0392b':fillPct>85?'#b9770f':'#7aa888'}}>{fillPct}%</span>}
+                      {inM && !wknd && <button className="zoom-btn" title="Open this day" onClick={e=>{e.stopPropagation();zoomToDay(date)}}>⤢</button>}
+                    </span>
                   </div>
                   {show.map(dp=>{
                     const de = entries.filter(e=>e.dept===dp.key&&e.date===date).sort((a,b)=>a.s-b.s)
