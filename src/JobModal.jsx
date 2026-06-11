@@ -77,14 +77,35 @@ export default function JobModal(props) {
                 const prevStep = stepIndex>0 ? orderedUsed[stepIndex-1] : null
                 const ov = (form.overlaps && form.overlaps[d.key]) || {mode:'standard',amount:0,unit:'mins'}
                 const setOv = patch => setForm(f=>({...f, overlaps:{...(f.overlaps||{}), [d.key]:{...((f.overlaps&&f.overlaps[d.key])||{mode:'standard',amount:0,unit:'mins'}), ...patch}}}))
+                const notes = (form.stepNotes && form.stepNotes[d.key]) || []
+                const addNote = type => setForm(f=>({...f, stepNotes:{...(f.stepNotes||{}), [d.key]:[...((f.stepNotes&&f.stepNotes[d.key])||[]), {type, text:''}]}}))
+                const updNote = (idx,text) => setForm(f=>{ const arr=[...((f.stepNotes&&f.stepNotes[d.key])||[])]; arr[idx]={...arr[idx],text}; return {...f, stepNotes:{...(f.stepNotes||{}), [d.key]:arr}} })
+                const delNote = idx => setForm(f=>{ const arr=[...((f.stepNotes&&f.stepNotes[d.key])||[])]; arr.splice(idx,1); return {...f, stepNotes:{...(f.stepNotes||{}), [d.key]:arr}} })
                 return (
                   <div key={d.key} className="step-card">
                     <div className="step-card-head">
                       <span className="step-dot" style={{background:d.color}} />
                       <strong>{d.label}</strong>
                       {d.key==='laser' && <span className="tag">material date applies</span>}
+                      <span className="step-note-icons">
+                        <button type="button" className="step-note-add warn" title="Add a warning" onClick={()=>addNote('warning')}>⚠</button>
+                        <button type="button" className="step-note-add note" title="Add a note" onClick={()=>addNote('note')}>🗒</button>
+                      </span>
                       <button type="button" className="step-remove" title="Remove this step" onClick={()=>removeStep(d.key)}>Remove</button>
                     </div>
+
+                    {notes.length>0 && (
+                      <div className="step-notes-list">
+                        {notes.map((n,idx)=>(
+                          <div key={idx} className={`step-note-item ${n.type}`}>
+                            <span className="step-note-ic">{n.type==='warning'?'⚠':'🗒'}</span>
+                            <input type="text" value={n.text} placeholder={n.type==='warning'?'Warning message…':'Note…'} onChange={e=>updNote(idx,e.target.value)} />
+                            <button type="button" title="Remove" onClick={()=>delNote(idx)}>×</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
                     <div className="step-inputs">
                       <div className="step-field">
                         <label>Time needed (minutes)</label>
