@@ -1,11 +1,11 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from './supabaseClient'
-import { loadAll, insertJob, updateJob, deleteJobDb, setCapacityDb, clearCapacityDb, setDeptResDb, seedIfEmpty, setDaySequenceDb } from './data'
+import { loadAll, insertJob, updateJob, deleteJobDb, setCapacityDb, clearCapacityDb, setDeptResDb, seedIfEmpty, setDaySequenceDb, saveDepartmentsDb, seedDepartmentsIfEmpty } from './data'
 import JobModal from './JobModal'
 import ErrorBoundary from './ErrorBoundary'
 
 // ─── Constants ───────────────────────────────────────────────
-const DEPTS = [
+const DEFAULT_DEPTS = [
   { key:'design',      label:'Design',         res:3,  color:'#185FA5', bg:'#E6F1FB', text:'#0C447C' },
   { key:'laser',       label:'Laser Cutting',  res:4,  color:'#0F6E56', bg:'#E1F5EE', text:'#085041' },
   { key:'deburring',   label:'Deburring',      res:4,  color:'#854F0B', bg:'#FAEEDA', text:'#633806' },
@@ -16,9 +16,11 @@ const DEPTS = [
   { key:'powder',      label:'Powder Coating', res:3,  color:'#BA7517', bg:'#FFF3DC', text:'#412402' },
   { key:'qa',          label:'QA',             res:2,  color:'#5F5E5A', bg:'#F1EFE8', text:'#2C2C2A' },
 ]
+// Palette for newly-added departments (label/bg/text auto-derived)
+const DEPT_PALETTE = ['#185FA5','#0F6E56','#854F0B','#533AB7','#993556','#3B6D11','#A32D2D','#BA7517','#5F5E5A','#1D7A8C','#7A1D6B','#2C7A1D']
 // Back-compat: old data used 'secondary' for what is now 'machining'
 const LEGACY_MAP = { secondary:'machining' }
-const DKEYS = DEPTS.map(d => d.key)
+const DEFAULT_DKEYS = DEFAULT_DEPTS.map(d => d.key)
 const STATUS = {
   scheduled:{dot:'#3B74BF',label:'Scheduled'},
   in_progress:{dot:'#39BF5B',label:'In Progress'},
@@ -41,7 +43,7 @@ const isWknd = s => { const w = parseD(s).getDay(); return w===0||w===6 }
 const nextWd = s => { let d = addDays(s,1); while(isWknd(d)) d = addDays(d,1); return d }
 const fmtM = m => { m=Math.round(m||0); const h=Math.floor(m/60),r=m%60; return h>0?(r>0?`${h}h ${r}m`:`${h}h`):`${r}m` }
 const fmtT = m => { const h=Math.floor(m/60)%24,mn=m%60; return `${String(h).padStart(2,'0')}:${String(mn).padStart(2,'0')}` }
-const deptOf = k => DEPTS.find(d=>d.key===k)||DEPTS[0]
+const deptOfDefault = k => DEFAULT_DEPTS.find(d=>d.key===k)||DEFAULT_DEPTS[0]
 const todayStr = () => fmt(new Date())
 const dowLabel = s => ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][parseD(s).getDay()]
 const dateLE = (a,b) => a <= b // ISO date strings compare correctly
@@ -75,8 +77,16 @@ export default function App({ session }) {
   const [jobs, setJobsRaw] = useState([])
   const setJobs = arr => setJobsRaw(arr.map(migrateJob))
 
+  // Department config (from DB, editable in Settings). Falls back to defaults until loaded.
+  const [depts, setDepts] = useState(DEFAULT_DEPTS.map((d,i)=>({...d,enabled:true,sortOrder:i})))
+  // ALL departments including disabled (for showing old job steps as needed); active = enabled only
+  const activeDepts = depts.filter(d=>d.enabled!==false)
+  const DEPTS = activeDepts                 // used by scheduler/UI = enabled, in order
+  const DKEYS = activeDepts.map(d=>d.key)
+  const deptOf = k => depts.find(d=>d.key===k) || deptOfDefault(k)
+
   const [capacity, setCapacity] = useState({})
-  const [deptRes, setDeptRes] = useState(() => Object.fromEntries(DEPTS.map(d=>[d.key,d.res])))
+  const [deptRes, setDeptRes] = useState(() => Object.fromEntries(DEFAULT_DEPTS.map(d=>[d.key,d.res])))
   const [loading, setLoading] = useState(true)
   const [loadErr, setLoadErr] = useState(null)
 
@@ -95,6 +105,7 @@ export default function App({ session }) {
   const [modalOpenId, setModalOpenId] = useState(0) // increments each open → unique key so JobModal always remounts fresh
   const [dirty, setDirty] = useState(false)
   const [dragJob, setDragJob] = useState(null) // {jobId, dept}
+  const [deptDraft, setDeptDraft] = useState([]) // working copy of departments while editing settings
 
   // Refs so the realtime callback always sees current values (avoids stale closures)
   const modalRef = useRef(null)
@@ -107,13 +118,14 @@ export default function App({ session }) {
   async function doRefresh() {
     if (modalRef.current) { pendingRefresh.current = true; return }
     try {
-      const { jobs:j, capacity:c, deptRes:r, daySeq:s } = await loadAll()
+      const { jobs:j, capacity:c, deptRes:r, daySeq:s, departments:dp } = await loadAll()
       // Re-check AFTER the await: if a modal opened while loading, don't disrupt it.
       if (modalRef.current) { pendingRefresh.current = true; return }
       setJobsRaw(j.map(migrateJob))
       setCapacity(c)
       if (Object.keys(r).length) setDeptRes(r)
       setDaySeq(s || {})
+      if (dp && dp.length) setDepts(dp)
       setLoadErr(null)
     } catch (e) {
       setLoadErr(e.message || 'Failed to load data')
@@ -140,7 +152,8 @@ export default function App({ session }) {
   useEffect(() => {
     let active = true
     ;(async () => {
-      try { await seedIfEmpty(Object.fromEntries(DEPTS.map(d=>[d.key,d.res]))) } catch {}
+      try { await seedIfEmpty(Object.fromEntries(DEFAULT_DEPTS.map(d=>[d.key,d.res]))) } catch {}
+      try { await seedDepartmentsIfEmpty(DEFAULT_DEPTS) } catch {}
       if (active) await doRefresh()
     })()
     const channel = supabase
@@ -149,6 +162,7 @@ export default function App({ session }) {
       .on('postgres_changes', { event:'*', schema:'public', table:'capacity' }, () => refresh())
       .on('postgres_changes', { event:'*', schema:'public', table:'dept_resources' }, () => refresh())
       .on('postgres_changes', { event:'*', schema:'public', table:'day_sequence' }, () => refresh())
+      .on('postgres_changes', { event:'*', schema:'public', table:'departments' }, () => refresh())
       .subscribe()
     return () => { active = false; if (refreshTimer.current) clearTimeout(refreshTimer.current); supabase.removeChannel(channel) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -683,7 +697,7 @@ export default function App({ session }) {
             <button className={`vtab ${view==='day'?'on':''}`} onClick={()=>setView('day')}>Day</button>
           </div>
           <div style={{flex:1}} />
-          <button className="btn-blue" onClick={()=>setModal('resources')}>⚙ Resources</button>
+          <button className="btn-blue" onClick={()=>{ setDeptDraft(depts.map(d=>({...d}))); setModal('settings') }}>⚙ Settings</button>
           <button className="btn-green" onClick={()=>openAdd(view==='month'?undefined:anchor)}>+ Add Job</button>
         </div>
 
@@ -937,29 +951,77 @@ export default function App({ session }) {
         )
       })()}
 
-      {/* Resources modal */}
-      {modal==='resources' && (
+      {/* Settings modal — departments + resources */}
+      {modal==='settings' && (() => {
+        const slugify = s => s.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,30) || ('dept'+Date.now())
+        const moveDept = (i,dir) => {
+          const j=i+dir; if(j<0||j>=deptDraft.length) return
+          const next=[...deptDraft]; const t=next[i]; next[i]=next[j]; next[j]=t; setDeptDraft(next)
+        }
+        const updDept = (i,patch) => { const next=[...deptDraft]; next[i]={...next[i],...patch}; setDeptDraft(next) }
+        const addDept = () => {
+          const color = DEPT_PALETTE[deptDraft.length % DEPT_PALETTE.length]
+          const key = 'dept_'+Date.now().toString(36)
+          setDeptDraft([...deptDraft, { key, label:'New Department', color, bg:'#f2f2f2', text:'#333', res:1, enabled:true }])
+        }
+        const saveSettings = async () => {
+          // ensure keys exist & derive bg/text for any new ones lacking them
+          const cleaned = deptDraft.map(d=>({
+            ...d,
+            key: d.key || slugify(d.label),
+            bg: d.bg || '#f2f2f2',
+            text: d.text || '#333',
+            res: Math.max(1, parseInt(d.res)||1),
+            label: (d.label||'').trim() || 'Department',
+          }))
+          setDepts(cleaned)
+          // persist departments + their resource counts
+          try {
+            await saveDepartmentsDb(cleaned)
+            for(const d of cleaned){ await setDeptResDb(d.key, d.res) }
+            // mirror res into deptRes state
+            setDeptRes(prev=>{ const n={...prev}; for(const d of cleaned) n[d.key]=d.res; return n })
+          } catch(e){ setLoadErr(e.message) }
+          setDirty(true); setModal(null)
+        }
+        return (
         <div className="mwrap" onClick={e=>{ if(e.target===e.currentTarget) setModal(null) }}>
-          <div className="mbox" onClick={e=>e.stopPropagation()}>
-            <div className="mh"><h2>Department Resources</h2><button className="x" onClick={()=>setModal(null)}>×</button></div>
+          <div className="mbox mbox-wide" onClick={e=>e.stopPropagation()}>
+            <div className="mh"><h2>Settings — Departments &amp; Resources</h2><button className="x" onClick={()=>setModal(null)}>×</button></div>
             <div className="mb">
-              <p style={{fontSize:12,color:'#666',marginBottom:10}}>Number of men or machines per department. Sets total daily man-minute capacity.</p>
-              <table className="dtbl">
-                <thead><tr><th>Department</th><th>Resources</th></tr></thead>
-                <tbody>
-                  {DEPTS.map(d=>(
-                    <tr key={d.key}>
-                      <td><span style={{display:'inline-flex',alignItems:'center',gap:5}}><span style={{width:8,height:8,borderRadius:2,background:d.color,display:'inline-block'}} /><strong>{d.label}</strong></span></td>
-                      <td style={{width:100}}><input type="number" min="1" max="99" value={resOf(d.key)} onChange={e=>{const v=parseInt(e.target.value)||1; setDeptRes({...deptRes,[d.key]:v}); setDeptResDb(d.key,v).catch(er=>setLoadErr(er.message)); setDirty(true)}} style={{width:80,textAlign:'center'}} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <p style={{fontSize:12,color:'#666',marginBottom:12}}>Reorder the production flow, enable/disable departments, set how many people or machines each has, and add or rename departments. Order here is the order jobs flow through.</p>
+              <div className="dept-settings">
+                {deptDraft.map((d,i)=>(
+                  <div key={d.key} className={`dept-row${d.enabled===false?' off':''}`}>
+                    <div className="dept-move">
+                      <button type="button" onClick={()=>moveDept(i,-1)} disabled={i===0} title="Move up">▲</button>
+                      <button type="button" onClick={()=>moveDept(i,1)} disabled={i===deptDraft.length-1} title="Move down">▼</button>
+                    </div>
+                    <input type="color" value={d.color} onChange={e=>updDept(i,{color:e.target.value})} title="Colour" className="dept-color" />
+                    <input type="text" value={d.label} onChange={e=>updDept(i,{label:e.target.value})} className="dept-label" placeholder="Department name" />
+                    <label className="dept-res-lbl">Resources
+                      <input type="number" min="1" max="99" value={d.res} onChange={e=>updDept(i,{res:parseInt(e.target.value)||1})} className="dept-res" />
+                    </label>
+                    <label className="dept-enable">
+                      <input type="checkbox" checked={d.enabled!==false} onChange={e=>updDept(i,{enabled:e.target.checked})} />
+                      {d.enabled!==false?'On':'Off'}
+                    </label>
+                  </div>
+                ))}
+              </div>
+              <button type="button" className="add-dept-btn" onClick={addDept}>+ Add department</button>
+              <div style={{fontSize:11,color:'#b9770f',marginTop:10,background:'#FFF7E8',border:'1px solid #f0d9a8',borderRadius:6,padding:'8px 10px'}}>
+                ⚠ Disabling a department hides it everywhere, including on existing jobs that used it — those jobs will reschedule as if that step isn't there. The time data isn't deleted, so re-enabling brings it back.
+              </div>
             </div>
-            <div className="mf"><button className="btn-green" onClick={()=>setModal(null)}>Done</button></div>
+            <div className="mf">
+              <button className="btn" onClick={()=>setModal(null)}>Cancel</button>
+              <button className="btn-green" onClick={saveSettings}>Save settings</button>
+            </div>
           </div>
         </div>
-      )}
+        )
+      })()}
 
       {/* Job modal — self-contained component with its own state */}
       {modal==='job' && form && (
