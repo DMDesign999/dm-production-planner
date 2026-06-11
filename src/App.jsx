@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from './supabaseClient'
 import { loadAll, insertJob, updateJob, deleteJobDb, setCapacityDb, clearCapacityDb, setDeptResDb, seedIfEmpty, setDaySequenceDb } from './data'
+import JobModal from './JobModal'
 
 // ─── Constants ───────────────────────────────────────────────
 const DEPTS = [
@@ -491,10 +492,11 @@ export default function App({ session }) {
       steps:DKEYS.filter(k => (job.deptMins?.[k]||0)>0 || job.pins?.[k] || job.done?.[k] || job.actual?.[k]) })
     setEditId(id); setModal('job')
   }
-  async function saveJob(){
-    if(!form.title.trim()) return
-    const cleanPins = {}; for(const k of DKEYS){ if(form.pins[k]) cleanPins[k]=form.pins[k] }
-    const data = { title:form.title.trim(), customer:(form.customer||'').trim(), subtitle:(form.subtitle||'').trim(), startDate:form.startDate, dueDate:form.dueDate, materialDate:form.materialDate, status:form.status, priority:form.priority, notes:form.notes, deptMins:form.deptMins, waits:form.waits, resources:form.resources, done:form.done, actual:form.actual, pins:cleanPins }
+  async function saveJob(formData){
+    const f = formData || form
+    if(!f.title.trim()) return
+    const cleanPins = {}; for(const k of DKEYS){ if(f.pins[k]) cleanPins[k]=f.pins[k] }
+    const data = { title:f.title.trim(), customer:(f.customer||'').trim(), subtitle:(f.subtitle||'').trim(), startDate:f.startDate, dueDate:f.dueDate, materialDate:f.materialDate, status:f.status||'scheduled', priority:f.priority, notes:f.notes, deptMins:f.deptMins, waits:f.waits, resources:f.resources, done:f.done, actual:f.actual, pins:cleanPins }
     setDirty(true); setModal(null)
     try {
       if(editId!==null){
@@ -511,7 +513,7 @@ export default function App({ session }) {
     setJobs(jobs.filter(j=>j.id!==id)); setDirty(true); setModal(null)
     try { await deleteJobDb(id) } catch(e){ setLoadErr(e.message) }
   }
-  const totalMins = form ? DKEYS.reduce((s,k)=>s+(Number(form.deptMins[k])||0),0) : 0
+  // (totalMins now lives inside JobModal)
 
   // ── Derived lists for pages ──
   const completedJobs = jobs.filter(isComplete)
@@ -866,136 +868,25 @@ export default function App({ session }) {
         </div>
       )}
 
-      {/* Job modal */}
-      {modal==='job' && form && (() => {
-        const isEditing = editId!==null
-        const activeSteps = form.steps || []
-        // show cards for explicitly-added steps, kept in canonical process order
-        const orderedUsed = DEPTS.filter(d=>activeSteps.includes(d.key))
-        const unusedDepts = DEPTS.filter(d=>!activeSteps.includes(d.key))
-        const addStep = key => setForm({...form, steps:[...activeSteps, key], deptMins:{...form.deptMins, [key]: form.deptMins[key]||0}})
-        const removeStep = key => setForm({
-          ...form,
-          steps:activeSteps.filter(k=>k!==key),
-          deptMins:{...form.deptMins,[key]:0},
-          waits:{...form.waits,[key]:{amount:0,unit:'mins'}},
-          resources:{...form.resources,[key]:0},
-          pins:{...form.pins,[key]:''},
-          done:{...form.done,[key]:false},
-          actual:{...form.actual,[key]:''},
-        })
-        return (
-        <div className="mwrap" onClick={e=>{ if(e.target===e.currentTarget) setModal(null) }}>
-          <div className="mbox mbox-wide" onClick={e=>e.stopPropagation()}>
-            <div className="mh"><h2>{isEditing?'Edit Job':'New Job'}</h2><button className="x" onClick={()=>setModal(null)}>×</button></div>
-            <div className="mb">
-
-              {/* ── Job details ── */}
-              <div className="form-section">
-                <div className="section-head">Job details</div>
-                <div className="field-grid">
-                  <div className="field"><label className="lbl">DM Number</label><input type="text" value={form.title} placeholder="e.g. DM12345" onChange={e=>setForm({...form,title:e.target.value})} /></div>
-                  <div className="field"><label className="lbl">Customer</label><input type="text" value={form.customer} placeholder="e.g. Acme Ltd" onChange={e=>setForm({...form,customer:e.target.value})} /></div>
-                  <div className="field"><label className="lbl">Sub-title <span className="opt">(optional)</span></label><input type="text" value={form.subtitle} placeholder="e.g. Balustrade" onChange={e=>setForm({...form,subtitle:e.target.value})} /></div>
-                  <div className="field"><label className="lbl">Priority</label><select value={form.priority} onChange={e=>setForm({...form,priority:e.target.value})}>{Object.entries(PRIORITY).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select></div>
-                  <div className="field"><label className="lbl">Start date</label><input type="date" value={form.startDate} onChange={e=>setForm({...form,startDate:e.target.value})} /></div>
-                  <div className="field"><label className="lbl">Delivery / Due date</label><input type="date" value={form.dueDate} onChange={e=>setForm({...form,dueDate:e.target.value})} /></div>
-                  <div className="field"><label className="lbl">Material due <span className="tag">LASER</span></label><input type="date" value={form.materialDate} onChange={e=>setForm({...form,materialDate:e.target.value})} /></div>
-                </div>
-              </div>
-
-              {/* ── Production steps ── */}
-              <div className="form-section">
-                <div className="section-head">
-                  Production steps
-                  <span className="section-total">Total: {fmtM(totalMins)}</span>
-                </div>
-
-                {orderedUsed.length===0 && <div className="no-steps">No steps yet. Add the departments this job passes through →</div>}
-
-                <div className="step-cards">
-                  {orderedUsed.map(d=>{
-                    const w=form.waits[d.key]||{amount:0,unit:'mins'}, mx=resOf(d.key)
-                    return (
-                      <div key={d.key} className="step-card">
-                        <div className="step-card-head">
-                          <span className="step-dot" style={{background:d.color}} />
-                          <strong>{d.label}</strong>
-                          {d.key==='laser' && <span className="tag">material date applies</span>}
-                          <button type="button" className="step-remove" title="Remove this step" onClick={()=>removeStep(d.key)}>Remove</button>
-                        </div>
-                        <div className="step-inputs">
-                          <div className="step-field">
-                            <label>Time needed (minutes)</label>
-                            <input type="number" min="0" value={form.deptMins[d.key]||''} placeholder="0" onChange={e=>setForm({...form,deptMins:{...form.deptMins,[d.key]:parseInt(e.target.value)||0}})} />
-                          </div>
-                          <div className="step-field">
-                            <label>People / machines on it</label>
-                            <input type="number" min="1" max={mx} value={form.resources[d.key]||''} placeholder="1" onChange={e=>setForm({...form,resources:{...form.resources,[d.key]:parseInt(e.target.value)||0}})} />
-                            <span className="step-hint">of {mx} available</span>
-                          </div>
-                          <div className="step-field">
-                            <label>Wait before next step</label>
-                            <div style={{display:'flex',gap:4}}>
-                              <input type="number" min="0" value={w.amount||''} placeholder="0" onChange={e=>setForm({...form,waits:{...form.waits,[d.key]:{...w,amount:parseInt(e.target.value)||0}}})} />
-                              <select value={w.unit} onChange={e=>setForm({...form,waits:{...form.waits,[d.key]:{...w,unit:e.target.value}}})}><option value="mins">mins</option><option value="hours">hours</option><option value="days">days</option></select>
-                            </div>
-                          </div>
-                          <div className="step-field">
-                            <label>Pin earliest start 📌 <span className="opt">(optional)</span></label>
-                            <div style={{display:'flex',gap:4,alignItems:'center'}}>
-                              <input type="date" value={form.pins[d.key]||''} onChange={e=>setForm({...form,pins:{...form.pins,[d.key]:e.target.value}})} />
-                              {form.pins[d.key] && <button type="button" title="Clear pin" className="pin-clear" onClick={()=>setForm({...form,pins:{...form.pins,[d.key]:''}})}>×</button>}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Shop-floor progress fields — only when editing */}
-                        {isEditing && (
-                          <div className="step-progress">
-                            <span className="progress-lbl">Shop-floor progress:</span>
-                            <label className="done-toggle">
-                              <input type="checkbox" checked={!!form.done[d.key]} onChange={e=>setForm({...form,done:{...form.done,[d.key]:e.target.checked}})} />
-                              Done
-                            </label>
-                            <span className="step-field-inline">
-                              <label>Actual mins taken</label>
-                              <input type="number" min="0" value={form.actual[d.key]||''} placeholder="–" onChange={e=>setForm({...form,actual:{...form.actual,[d.key]:parseInt(e.target.value)||''}})} />
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-
-                {unusedDepts.length>0 && (
-                  <div className="add-step-row">
-                    <select value="" onChange={e=>{ if(e.target.value) addStep(e.target.value) }}>
-                      <option value="">+ Add a department step…</option>
-                      {unusedDepts.map(d=><option key={d.key} value={d.key}>{d.label}</option>)}
-                    </select>
-                  </div>
-                )}
-              </div>
-
-              {/* ── Notes ── */}
-              <div className="form-section">
-                <div className="section-head">Notes</div>
-                <textarea value={form.notes} placeholder="Any extra detail…" onChange={e=>setForm({...form,notes:e.target.value})} />
-              </div>
-
-            </div>
-            <div className="mf">
-              {isEditing && <button className="btn-del" onClick={()=>deleteJob(editId)}>Delete</button>}
-              {isEditing && isComplete(jobs.find(j=>j.id===editId)||{deptMins:{}}) && <button className="btn" style={{borderColor:'#BA7517',color:'#BA7517'}} onClick={()=>{reopenJob(editId);setModal(null)}}>Reopen job</button>}
-              <button className="btn" onClick={()=>setModal(null)}>Cancel</button>
-              <button className="btn-green" onClick={saveJob}>Save Job</button>
-            </div>
-          </div>
-        </div>
-        )
-      })()}
+      {/* Job modal — self-contained component with its own state */}
+      {modal==='job' && form && (
+        <JobModal
+          key={editId===null ? 'new' : `edit-${editId}`}
+          depts={DEPTS}
+          dkeys={DKEYS}
+          priority={PRIORITY}
+          today={TODAY}
+          isEditing={editId!==null}
+          initial={form}
+          resOf={resOf}
+          fmtM={fmtM}
+          isComplete={editId!==null ? isComplete(jobs.find(j=>j.id===editId)||{deptMins:{}}) : false}
+          onSave={saveJob}
+          onDelete={()=>deleteJob(editId)}
+          onReopen={()=>{reopenJob(editId);setModal(null)}}
+          onClose={()=>setModal(null)}
+        />
+      )}
     </div>
   )
 }
