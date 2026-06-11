@@ -20,6 +20,7 @@ export function rowToJob(r) {
     actual: r.actual || {},
     pins: r.pins || {},
     overlaps: r.overlaps || {},
+    stepNotes: r.step_notes || {},
     reopened: r.reopened || false,
   }
 }
@@ -43,6 +44,7 @@ export function jobToRow(j) {
     actual: j.actual || {},
     pins: j.pins || {},
     overlaps: j.overlaps || {},
+    step_notes: j.stepNotes || {},
     reopened: !!j.reopened,
     updated_at: new Date().toISOString(),
   }
