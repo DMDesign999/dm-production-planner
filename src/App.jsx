@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from './supabaseClient'
-import { loadAll, insertJob, updateJob, deleteJobDb, setCapacityDb, clearCapacityDb, setDeptResDb, seedIfEmpty, setDaySequenceDb, saveDepartmentsDb, seedDepartmentsIfEmpty } from './data'
+import { loadAll, insertJob, updateJob, deleteJobDb, setCapacityDb, clearCapacityDb, setDeptResDb, seedIfEmpty, setDaySequenceDb, saveDepartmentsDb, seedDepartmentsIfEmpty, insertStaffDb, updateStaffDb, deleteStaffDb, setHolidayDb, setOvertimeDb } from './data'
 import JobModal from './JobModal'
+import SettingsModal from './SettingsModal'
 import ErrorBoundary from './ErrorBoundary'
 
 // ─── Constants ───────────────────────────────────────────────
@@ -81,6 +82,9 @@ export default function App({ session }) {
 
   const [capacity, setCapacity] = useState({})
   const [deptRes, setDeptRes] = useState(() => Object.fromEntries(DEFAULT_DEPTS.map(d=>[d.key,d.res])))
+  const [staff, setStaff] = useState([])
+  const [holidays, setHolidays] = useState({}) // staffId -> [dates]
+  const [overtime, setOvertime] = useState({}) // "dept|day" -> {extraHours, staffCount}
   const [loading, setLoading] = useState(true)
   const [loadErr, setLoadErr] = useState(null)
 
@@ -95,11 +99,12 @@ export default function App({ session }) {
   const [editId, setEditId] = useState(null)
   const [capEdit, setCapEdit] = useState(null)
   const [capVal, setCapVal] = useState('')
+  const [otHours, setOtHours] = useState('')
+  const [otStaff, setOtStaff] = useState('1')
   const [form, setForm] = useState(null)
   const [modalOpenId, setModalOpenId] = useState(0) // increments each open → unique key so JobModal always remounts fresh
   const [dirty, setDirty] = useState(false)
   const [dragJob, setDragJob] = useState(null) // {jobId, dept}
-  const [deptDraft, setDeptDraft] = useState([]) // working copy of departments while editing settings
   const [openNote, setOpenNote] = useState(null) // {jobId, dept} whose notes are pinned open
 
   // Refs so the realtime callback always sees current values (avoids stale closures)
@@ -113,7 +118,7 @@ export default function App({ session }) {
   async function doRefresh() {
     if (modalRef.current) { pendingRefresh.current = true; return }
     try {
-      const { jobs:j, capacity:c, deptRes:r, daySeq:s, departments:dp } = await loadAll()
+      const { jobs:j, capacity:c, deptRes:r, daySeq:s, departments:dp, staff:st, holidays:hd, overtime:ot } = await loadAll()
       // Re-check AFTER the await: if a modal opened while loading, don't disrupt it.
       if (modalRef.current) { pendingRefresh.current = true; return }
       setJobsRaw(j.map(migrateJob))
@@ -121,6 +126,9 @@ export default function App({ session }) {
       if (Object.keys(r).length) setDeptRes(r)
       setDaySeq(s || {})
       if (dp && dp.length) setDepts(dp)
+      setStaff(st || [])
+      setHolidays(hd || {})
+      setOvertime(ot || {})
       setLoadErr(null)
     } catch (e) {
       setLoadErr(e.message || 'Failed to load data')
@@ -158,6 +166,9 @@ export default function App({ session }) {
       .on('postgres_changes', { event:'*', schema:'public', table:'dept_resources' }, () => refresh())
       .on('postgres_changes', { event:'*', schema:'public', table:'day_sequence' }, () => refresh())
       .on('postgres_changes', { event:'*', schema:'public', table:'departments' }, () => refresh())
+      .on('postgres_changes', { event:'*', schema:'public', table:'staff' }, () => refresh())
+      .on('postgres_changes', { event:'*', schema:'public', table:'staff_holidays' }, () => refresh())
+      .on('postgres_changes', { event:'*', schema:'public', table:'overtime' }, () => refresh())
       .subscribe()
     return () => { active = false; if (refreshTimer.current) clearTimeout(refreshTimer.current); supabase.removeChannel(channel) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -172,9 +183,45 @@ export default function App({ session }) {
   }, [openNote])
 
   const TODAY = todayStr()
-  const capOf = (dk,date) => (capacity[dk]||{})[date] ?? DEF_CAP
-  const resOf = dk => deptRes[dk] ?? (DEPTS.find(d=>d.key===dk)||{}).res ?? 1
-  const manCap = (dk,date) => resOf(dk) * capOf(dk,date)
+
+  // ── New capacity model (Stage 3) ──
+  const deptInfo = dk => depts.find(d=>d.key===dk) || deptOfDefault(dk)
+  // Working minutes per single resource per day for a department
+  const workingMins = dk => {
+    const d = deptInfo(dk)
+    if((d.deptType||'people')==='machine'){
+      return Math.round((d.machineHours ?? 8) * 60)
+    }
+    const span = (d.dayEnd ?? 990) - (d.dayStart ?? 480)
+    return Math.max(0, span - (d.breakMins ?? 30))
+  }
+  // Staff assigned to a dept (home dept, or 'also works in')
+  const staffForDept = dk => staff.filter(s => s.homeDept===dk || (s.alsoDepts||[]).includes(dk))
+  const onHoliday = (staffId, date) => (holidays[staffId]||[]).includes(date)
+  // Resources available for a dept on a date
+  const resOf = (dk, date) => {
+    const d = deptInfo(dk)
+    if((d.deptType||'people')==='machine'){
+      return deptRes[dk] ?? d.res ?? 1   // machines: manual count
+    }
+    // people: count staff whose HOME dept is this one and who aren't on holiday that date.
+    // (flexible 'also works in' staff are shown as availability but not auto-counted here)
+    const home = staff.filter(s=>s.homeDept===dk)
+    if(home.length===0) return deptRes[dk] ?? d.res ?? 1  // fallback to manual if no staff assigned yet
+    if(!date) return home.length
+    return home.filter(s=>!onHoliday(s.id,date)).length
+  }
+  // Manual per-day capacity override (minutes per resource) still wins if set
+  const capOf = (dk,date) => (capacity[dk]||{})[date] ?? workingMins(dk)
+  // Overtime for a dept/day
+  const otOf = (dk,date) => overtime[`${dk}|${date}`] || null
+  // Total man-minutes available for a dept on a date
+  const manCap = (dk,date) => {
+    let base = resOf(dk,date) * capOf(dk,date)
+    const ot = otOf(dk,date)
+    if(ot && ot.extraHours>0) base += Math.round(ot.extraHours*60) * (ot.staffCount||1)
+    return base
+  }
   const waitMins = w => (!w||!w.amount)?0:w.unit==='hours'?w.amount*60:w.unit==='days'?w.amount*1440:Number(w.amount)||0
 
   function advCursor(cur, mins){
@@ -396,7 +443,7 @@ export default function App({ session }) {
     const cbg=over?'#FCEBEB':warn?'#FFF3DC':'#EAF3DE', ctxt=over?'#7a1e1e':warn?'#633806':'#1a5c2e'
     return (
       <span className="cb" style={{background:cbg,color:ctxt}}
-            onClick={e=>{e.stopPropagation();setCapEdit(`${dk}|${date}`);setCapVal(String(capOf(dk,date)));setModal('cap')}}>
+            onClick={e=>{e.stopPropagation();setCapEdit(`${dk}|${date}`);setCapVal(String(capOf(dk,date)));const ot=otOf(dk,date);setOtHours(ot&&ot.extraHours?String(ot.extraHours):'');setOtStaff(ot&&ot.staffCount?String(ot.staffCount):'1');setModal('cap')}}>
         {fmtM(usedMM)}/{fmtM(totMM)}
       </span>
     )
@@ -744,7 +791,7 @@ export default function App({ session }) {
             <button className={`vtab ${view==='day'?'on':''}`} onClick={()=>setView('day')}>Day</button>
           </div>
           <div style={{flex:1}} />
-          <button className="btn-blue" onClick={()=>{ setDeptDraft(depts.map(d=>({...d}))); setModal('settings') }}>⚙ Settings</button>
+          <button className="btn-blue" onClick={()=>{ setModalOpenId(n=>n+1); setModal('settings') }}>⚙ Settings</button>
           <button className="btn-green" onClick={()=>openAdd(view==='month'?undefined:anchor)}>+ Add Job</button>
         </div>
 
@@ -981,21 +1028,37 @@ export default function App({ session }) {
 
       {/* Capacity modal */}
       {modal==='cap' && capEdit && (() => {
-        const [dk,ds]=capEdit.split('|'), dp=deptOf(dk), res=resOf(dk)
+        const [dk,ds]=capEdit.split('|'), dp=deptOf(dk), res=resOf(dk,ds)
+        const isMachine = (deptInfo(dk).deptType||'people')==='machine'
         return (
           <div className="mwrap" onClick={e=>{ if(e.target===e.currentTarget) setModal(null) }}>
             <div className="mbox" onClick={e=>e.stopPropagation()}>
               <div className="mh"><h2>Capacity — {dp.label}</h2><button className="x" onClick={()=>setModal(null)}>×</button></div>
               <div className="mb">
-                <div style={{fontSize:12,color:'#666',marginBottom:10}}>{ds} · {res} resource{res!==1?'s':''}</div>
-                <label className="lbl">Minutes per resource (default 480 = 8h)</label>
+                <div style={{fontSize:12,color:'#666',marginBottom:10}}>{ds} · {res} {isMachine?'machine':'person/people'}{res!==1&&!isMachine?'':''} available</div>
+                <label className="lbl">Minutes per resource ({fmtM(workingMins(dk))} normal)</label>
                 <input type="number" min="0" max="1440" value={capVal} onChange={e=>setCapVal(e.target.value)} />
-                <div style={{fontSize:10,color:'#888',marginTop:4}}>{fmtM(parseInt(capVal)||0)} each · total {fmtM((parseInt(capVal)||0)*res)}</div>
+                <div style={{fontSize:10,color:'#888',marginTop:4}}>{fmtM(parseInt(capVal)||0)} each · base total {fmtM((parseInt(capVal)||0)*res)}</div>
+
+                <div className="ot-section">
+                  <div className="ot-head">＋ Overtime for this day</div>
+                  <div className="ot-fields">
+                    <label>Extra hours<input type="number" min="0" max="12" step="0.5" value={otHours} placeholder="0" onChange={e=>setOtHours(e.target.value)} /></label>
+                    <label>{isMachine?'Machines':'Staff'} on OT<input type="number" min="1" max="50" value={otStaff} onChange={e=>setOtStaff(e.target.value)} /></label>
+                  </div>
+                  {(parseFloat(otHours)||0)>0 && <div className="ot-note">+{fmtM(Math.round((parseFloat(otHours)||0)*60)*(parseInt(otStaff)||1))} added that day</div>}
+                </div>
               </div>
               <div className="mf">
-                <button className="btn-del" onClick={()=>{ const c={...capacity}; if(c[dk]) delete c[dk][ds]; setCapacity(c); clearCapacityDb(dk,ds).catch(e=>setLoadErr(e.message)); setDirty(true); setModal(null) }}>Reset</button>
+                <button className="btn-del" onClick={()=>{ const c={...capacity}; if(c[dk]) delete c[dk][ds]; setCapacity(c); clearCapacityDb(dk,ds).catch(e=>setLoadErr(e.message)); setOvertime(prev=>{const n={...prev};delete n[`${dk}|${ds}`];return n}); setOvertimeDb(dk,ds,0,0).catch(()=>{}); setDirty(true); setModal(null) }}>Reset</button>
                 <button className="btn" onClick={()=>setModal(null)}>Cancel</button>
-                <button className="btn-green" onClick={()=>{ const v=parseInt(capVal)||0; setCapacity({...capacity,[dk]:{...(capacity[dk]||{}),[ds]:v}}); setCapacityDb(dk,ds,v).catch(e=>setLoadErr(e.message)); setDirty(true); setModal(null) }}>Save</button>
+                <button className="btn-green" onClick={()=>{
+                  const v=parseInt(capVal)||0; setCapacity({...capacity,[dk]:{...(capacity[dk]||{}),[ds]:v}}); setCapacityDb(dk,ds,v).catch(e=>setLoadErr(e.message))
+                  const oh=parseFloat(otHours)||0, oc=parseInt(otStaff)||1
+                  setOvertime(prev=>{ const n={...prev}; if(oh>0) n[`${dk}|${ds}`]={extraHours:oh,staffCount:oc}; else delete n[`${dk}|${ds}`]; return n })
+                  setOvertimeDb(dk,ds,oh,oc).catch(e=>setLoadErr(e.message))
+                  setDirty(true); setModal(null)
+                }}>Save</button>
               </div>
             </div>
           </div>
@@ -1003,76 +1066,40 @@ export default function App({ session }) {
       })()}
 
       {/* Settings modal — departments + resources */}
-      {modal==='settings' && (() => {
-        const slugify = s => s.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,30) || ('dept'+Date.now())
-        const moveDept = (i,dir) => {
-          const j=i+dir; if(j<0||j>=deptDraft.length) return
-          const next=[...deptDraft]; const t=next[i]; next[i]=next[j]; next[j]=t; setDeptDraft(next)
-        }
-        const updDept = (i,patch) => { const next=[...deptDraft]; next[i]={...next[i],...patch}; setDeptDraft(next) }
-        const addDept = () => {
-          const color = DEPT_PALETTE[deptDraft.length % DEPT_PALETTE.length]
-          const key = 'dept_'+Date.now().toString(36)
-          setDeptDraft([...deptDraft, { key, label:'New Department', color, bg:'#f2f2f2', text:'#333', res:1, enabled:true }])
-        }
-        const saveSettings = async () => {
-          // ensure keys exist & derive bg/text for any new ones lacking them
-          const cleaned = deptDraft.map(d=>({
-            ...d,
-            key: d.key || slugify(d.label),
-            bg: d.bg || '#f2f2f2',
-            text: d.text || '#333',
-            res: Math.max(1, parseInt(d.res)||1),
-            label: (d.label||'').trim() || 'Department',
-          }))
-          setDepts(cleaned)
-          // persist departments + their resource counts
-          try {
-            await saveDepartmentsDb(cleaned)
-            for(const d of cleaned){ await setDeptResDb(d.key, d.res) }
-            // mirror res into deptRes state
-            setDeptRes(prev=>{ const n={...prev}; for(const d of cleaned) n[d.key]=d.res; return n })
-          } catch(e){ setLoadErr(e.message) }
-          setDirty(true); setModal(null)
-        }
-        return (
-        <div className="mwrap" onClick={e=>{ if(e.target===e.currentTarget) setModal(null) }}>
-          <div className="mbox mbox-wide" onClick={e=>e.stopPropagation()}>
-            <div className="mh"><h2>Settings — Departments &amp; Resources</h2><button className="x" onClick={()=>setModal(null)}>×</button></div>
-            <div className="mb">
-              <p style={{fontSize:12,color:'#666',marginBottom:12}}>Reorder the production flow, enable/disable departments, set how many people or machines each has, and add or rename departments. Order here is the order jobs flow through.</p>
-              <div className="dept-settings">
-                {deptDraft.map((d,i)=>(
-                  <div key={d.key} className={`dept-row${d.enabled===false?' off':''}`}>
-                    <div className="dept-move">
-                      <button type="button" onClick={()=>moveDept(i,-1)} disabled={i===0} title="Move up">▲</button>
-                      <button type="button" onClick={()=>moveDept(i,1)} disabled={i===deptDraft.length-1} title="Move down">▼</button>
-                    </div>
-                    <input type="color" value={d.color} onChange={e=>updDept(i,{color:e.target.value})} title="Colour" className="dept-color" />
-                    <input type="text" value={d.label} onChange={e=>updDept(i,{label:e.target.value})} className="dept-label" placeholder="Department name" />
-                    <label className="dept-res-lbl">Resources
-                      <input type="number" min="1" max="99" value={d.res} onChange={e=>updDept(i,{res:parseInt(e.target.value)||1})} className="dept-res" />
-                    </label>
-                    <label className="dept-enable">
-                      <input type="checkbox" checked={d.enabled!==false} onChange={e=>updDept(i,{enabled:e.target.checked})} />
-                      {d.enabled!==false?'On':'Off'}
-                    </label>
-                  </div>
-                ))}
-              </div>
-              <button type="button" className="add-dept-btn" onClick={addDept}>+ Add department</button>
-              <div style={{fontSize:11,color:'#b9770f',marginTop:10,background:'#FFF7E8',border:'1px solid #f0d9a8',borderRadius:6,padding:'8px 10px'}}>
-                ⚠ Disabling a department hides it everywhere, including on existing jobs that used it — those jobs will reschedule as if that step isn't there. The time data isn't deleted, so re-enabling brings it back.
-              </div>
-            </div>
-            <div className="mf">
-              <button className="btn" onClick={()=>setModal(null)}>Cancel</button>
-              <button className="btn-green" onClick={saveSettings}>Save settings</button>
-            </div>
-          </div>
-        </div>
-        )
-      })()}
+      {modal==='settings' && (
+        <SettingsModal
+          key={`settings-${modalOpenId}`}
+          initialDepts={depts}
+          staff={staff}
+          holidays={holidays}
+          onClose={()=>setModal(null)}
+          onSaveDepts={async (cleaned)=>{
+            setDepts(cleaned)
+            try {
+              await saveDepartmentsDb(cleaned)
+              for(const d of cleaned){ await setDeptResDb(d.key, d.res) }
+              setDeptRes(prev=>{ const n={...prev}; for(const d of cleaned) n[d.key]=d.res; return n })
+            } catch(e){ setLoadErr(e.message) }
+            setDirty(true); setModal(null)
+          }}
+          onAddStaff={async (s)=>{
+            try { const created = await insertStaffDb(s); setStaff(prev=>[...prev,created]) } catch(e){ setLoadErr(e.message) }
+            setDirty(true)
+          }}
+          onUpdateStaff={(s)=>{
+            setStaff(prev=>prev.map(x=>x.id===s.id?s:x))
+            updateStaffDb(s).catch(e=>setLoadErr(e.message)); setDirty(true)
+          }}
+          onDeleteStaff={(id)=>{
+            setStaff(prev=>prev.filter(x=>x.id!==id))
+            deleteStaffDb(id).catch(e=>setLoadErr(e.message)); setDirty(true)
+          }}
+          onToggleHoliday={(staffId,date,isOff)=>{
+            setHolidays(prev=>{ const arr=new Set(prev[staffId]||[]); isOff?arr.add(date):arr.delete(date); return {...prev,[staffId]:[...arr]} })
+            setHolidayDb(staffId,date,isOff).catch(e=>setLoadErr(e.message)); setDirty(true)
+          }}
+        />
+      )}
 
       {/* Job modal — self-contained component with its own state */}
       {modal==='job' && form && (
