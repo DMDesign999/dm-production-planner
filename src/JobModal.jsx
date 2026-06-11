@@ -1,17 +1,9 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState } from 'react'
 
 // ... (props documented below)
 export default function JobModal(props) {
   const { depts, dkeys, priority, today, isEditing, initial, resOf, fmtM, isComplete, onSave, onDelete, onReopen, onClose } = props
   const [form, setForm] = useState(initial)
-  const [diag, setDiag] = useState('mounted')
-  const renderCount = useRef(0)
-  renderCount.current++
-
-  useEffect(() => {
-    setDiag('mounted ok')
-    return () => { /* unmounting */ }
-  }, [])
 
   const activeSteps = form.steps || []
   const orderedUsed = depts.filter(d => activeSteps.includes(d.key))
@@ -27,6 +19,7 @@ export default function JobModal(props) {
     pins:{...f.pins, [key]: f.pins?.[key]||''},
     done:{...f.done, [key]: f.done?.[key]||false},
     actual:{...f.actual, [key]: f.actual?.[key]||''},
+    overlaps:{...f.overlaps, [key]: f.overlaps?.[key] || {mode:'standard',amount:0,unit:'mins'}},
   }))
   const removeStep = key => setForm(f => ({
     ...f,
@@ -37,6 +30,7 @@ export default function JobModal(props) {
     pins:{...f.pins,[key]:''},
     done:{...f.done,[key]:false},
     actual:{...f.actual,[key]:''},
+    overlaps:{...f.overlaps,[key]:{mode:'standard',amount:0,unit:'mins'}},
   }))
 
   const upd = patch => setForm(f => ({ ...f, ...patch }))
@@ -44,7 +38,7 @@ export default function JobModal(props) {
   return (
     <div className="mwrap" onClick={e=>{ if(e.target===e.currentTarget) onClose() }}>
       <div className="mbox mbox-wide" onClick={e=>e.stopPropagation()}>
-        <div className="mh"><h2>{isEditing?'Edit Job':'New Job'} <span style={{fontSize:9,opacity:.5,fontWeight:400}}>r{renderCount.current}·{form.steps?.length||0}steps</span></h2><button className="x" onClick={onClose}>×</button></div>
+        <div className="mh"><h2>{isEditing?'Edit Job':'New Job'}</h2><button className="x" onClick={onClose}>×</button></div>
         <div className="mb">
 
           {/* ── Job details ── */}
@@ -79,6 +73,10 @@ export default function JobModal(props) {
                 const pinVal = (form.pins && form.pins[d.key]) || ''
                 const doneVal = !!(form.done && form.done[d.key])
                 const actualVal = (form.actual && form.actual[d.key]) || ''
+                const stepIndex = orderedUsed.findIndex(x=>x.key===d.key)
+                const prevStep = stepIndex>0 ? orderedUsed[stepIndex-1] : null
+                const ov = (form.overlaps && form.overlaps[d.key]) || {mode:'standard',amount:0,unit:'mins'}
+                const setOv = patch => setForm(f=>({...f, overlaps:{...(f.overlaps||{}), [d.key]:{...((f.overlaps&&f.overlaps[d.key])||{mode:'standard',amount:0,unit:'mins'}), ...patch}}}))
                 return (
                   <div key={d.key} className="step-card">
                     <div className="step-card-head">
@@ -113,6 +111,28 @@ export default function JobModal(props) {
                       </div>
                     </div>
 
+                    {prevStep && (
+                      <div className="overlap-row">
+                        <span className="overlap-lbl">Start this step:</span>
+                        <select value={ov.mode||'standard'} onChange={e=>setOv({mode:e.target.value})}>
+                          <option value="standard">After {prevStep.label} finishes (standard)</option>
+                          <option value="time">Once {prevStep.label} has run for…</option>
+                          <option value="pct">Once {prevStep.label} is % done…</option>
+                        </select>
+                        {ov.mode==='time' && (
+                          <span className="overlap-inputs">
+                            <input type="number" min="0" value={ov.amount||''} placeholder="0" onChange={e=>setOv({amount:parseInt(e.target.value)||0})} />
+                            <select value={ov.unit||'mins'} onChange={e=>setOv({unit:e.target.value})}><option value="mins">mins</option><option value="hours">hours</option></select>
+                          </span>
+                        )}
+                        {ov.mode==='pct' && (
+                          <span className="overlap-inputs">
+                            <input type="number" min="0" max="100" value={ov.amount||''} placeholder="0" onChange={e=>setOv({amount:parseInt(e.target.value)||0})} />
+                            <span style={{fontSize:11,color:'#666'}}>% done</span>
+                          </span>
+                        )}
+                      </div>
+                    )}
                     {isEditing && (
                       <div className="step-progress">
                         <span className="progress-lbl">Shop-floor progress:</span>
