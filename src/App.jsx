@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from './supabaseClient'
 import { loadAll, insertJob, updateJob, deleteJobDb, setCapacityDb, clearCapacityDb, setDeptResDb, seedIfEmpty, setDaySequenceDb } from './data'
 import JobModal from './JobModal'
+import ErrorBoundary from './ErrorBoundary'
 
 // ─── Constants ───────────────────────────────────────────────
 const DEPTS = [
@@ -870,6 +871,7 @@ export default function App({ session }) {
 
       {/* Job modal — self-contained component with its own state */}
       {modal==='job' && form && (
+        <ErrorBoundary onClose={()=>setModal(null)}>
         <JobModal
           key={editId===null ? 'new' : `edit-${editId}`}
           depts={DEPTS}
@@ -886,6 +888,7 @@ export default function App({ session }) {
           onReopen={()=>{reopenJob(editId);setModal(null)}}
           onClose={()=>setModal(null)}
         />
+        </ErrorBoundary>
       )}
     </div>
   )
