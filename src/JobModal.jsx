@@ -1,25 +1,17 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
-// Self-contained job add/edit modal.
-// Holds its own form state so typing never re-renders the parent App
-// (which is what was tearing the modal down mid-entry).
-//
-// Props:
-//   depts       - array of department defs
-//   dkeys       - array of department keys in process order
-//   priority    - PRIORITY map
-//   today       - today's date string
-//   isEditing   - bool
-//   initial     - initial form object (already shaped by the parent)
-//   resOf       - (deptKey) => resource count
-//   fmtM        - minutes formatter
-//   isComplete  - whether the (existing) job is complete
-//   onSave      - (formData) => void
-//   onDelete    - () => void
-//   onReopen    - () => void
-//   onClose     - () => void
-export default function JobModal({ depts, dkeys, priority, today, isEditing, initial, resOf, fmtM, isComplete, onSave, onDelete, onReopen, onClose }) {
+// ... (props documented below)
+export default function JobModal(props) {
+  const { depts, dkeys, priority, today, isEditing, initial, resOf, fmtM, isComplete, onSave, onDelete, onReopen, onClose } = props
   const [form, setForm] = useState(initial)
+  const [diag, setDiag] = useState('mounted')
+  const renderCount = useRef(0)
+  renderCount.current++
+
+  useEffect(() => {
+    setDiag('mounted ok')
+    return () => { /* unmounting */ }
+  }, [])
 
   const activeSteps = form.steps || []
   const orderedUsed = depts.filter(d => activeSteps.includes(d.key))
@@ -52,7 +44,7 @@ export default function JobModal({ depts, dkeys, priority, today, isEditing, ini
   return (
     <div className="mwrap" onClick={e=>{ if(e.target===e.currentTarget) onClose() }}>
       <div className="mbox mbox-wide" onClick={e=>e.stopPropagation()}>
-        <div className="mh"><h2>{isEditing?'Edit Job':'New Job'}</h2><button className="x" onClick={onClose}>×</button></div>
+        <div className="mh"><h2>{isEditing?'Edit Job':'New Job'} <span style={{fontSize:9,opacity:.5,fontWeight:400}}>r{renderCount.current}·{form.steps?.length||0}steps</span></h2><button className="x" onClick={onClose}>×</button></div>
         <div className="mb">
 
           {/* ── Job details ── */}
