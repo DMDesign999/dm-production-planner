@@ -293,3 +293,57 @@ textarea{height:48px;resize:vertical}
 .npi-text{flex:1;word-break:break-word}
 .note-pop-item.warning .npi-text{color:#ffe9a8}
 .note-pop-item.note .npi-text{color:#cfe6fb}
+
+/* ── Settings tabs ── */
+.settings-tabs{display:flex;gap:2px;padding:0 20px;border-bottom:1px solid var(--border);background:#fafafa}
+.settings-tabs button{padding:11px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#888;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.settings-tabs button.on{color:var(--blue);border-bottom-color:var(--blue)}
+.settings-help{font-size:12px;color:#666;margin-bottom:12px}
+.settings-warn{font-size:11px;color:#b9770f;margin-top:10px;background:#FFF7E8;border:1px solid #f0d9a8;border-radius:6px;padding:8px 10px}
+
+/* ── Dept rows v2 (with pattern) ── */
+.dept-row2{border:1px solid var(--border);border-radius:8px;background:#fff;margin-bottom:8px;overflow:hidden}
+.dept-row2.off{background:#fafafa;opacity:.6}
+.dept-row-top{display:flex;align-items:center;gap:10px;padding:8px 10px}
+.dept-row-pattern{display:flex;align-items:flex-end;gap:12px;padding:8px 10px 10px 46px;background:#f7f9fb;border-top:1px dashed var(--border);flex-wrap:wrap}
+.dept-row-pattern label{display:flex;flex-direction:column;font-size:9px;color:#888;font-weight:700;text-transform:uppercase;letter-spacing:.04em;gap:3px}
+.dept-row-pattern input{width:84px;padding:5px 7px;font-size:12px;font-weight:400;text-transform:none}
+.dept-type{padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:5px;background:#fff}
+.pattern-note{flex:1;min-width:140px;font-size:10px;color:#999;font-weight:400;text-transform:none;letter-spacing:0;align-self:center}
+
+/* ── Staff tab ── */
+.staff-add{display:flex;gap:8px;margin-bottom:14px}
+.staff-add input{flex:1;padding:8px 10px}
+.staff-add select{padding:8px 10px;border:1px solid var(--border);border-radius:5px}
+.staff-list{display:flex;flex-direction:column;gap:8px}
+.staff-row{border:1px solid var(--border);border-radius:8px;padding:10px;background:#fff}
+.staff-main{display:flex;align-items:center;gap:10px}
+.staff-name{flex:1;font-weight:600;font-size:13px;padding:6px 9px}
+.staff-home{display:flex;flex-direction:column;font-size:9px;color:#888;font-weight:700;text-transform:uppercase;gap:2px}
+.staff-home select{padding:5px 7px;font-size:12px;border:1px solid var(--border);border-radius:5px;font-weight:400;text-transform:none}
+.staff-hol-btn{padding:7px 12px;border:1px solid var(--border);background:#f7faff;border-radius:6px;font-size:12px;font-weight:600;color:var(--blue);cursor:pointer}
+.staff-hol-btn:hover{background:#eef4fb}
+.staff-del{border:none;background:none;color:#c0392b;font-size:20px;font-weight:700;cursor:pointer;padding:0 4px;line-height:1}
+.staff-also{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)}
+.also-lbl{font-size:10px;color:#999;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.also-chip{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#555;background:#f4f4f4;padding:3px 8px;border-radius:12px;cursor:pointer}
+.also-chip input{width:auto;margin:0}
+
+/* ── Holiday calendar ── */
+.hol-cal{margin-top:10px;padding:10px;background:#fafafa;border-radius:8px;border:1px solid var(--border)}
+.hol-cal-head{display:flex;align-items:center;justify-content:center;gap:14px;margin-bottom:8px;font-size:13px;font-weight:600}
+.hol-cal-head button{border:1px solid var(--border);background:#fff;border-radius:5px;width:26px;height:26px;cursor:pointer;font-size:14px}
+.hol-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.hol-dow{text-align:center;font-size:9px;color:#aaa;font-weight:700;padding:2px 0}
+.hol-day{aspect-ratio:1;border:1px solid var(--border);background:#fff;border-radius:5px;cursor:pointer;font-size:11px;color:#444}
+.hol-day:hover{background:#eef4fb;border-color:var(--blue)}
+.hol-day.off{background:#FCEBEB;border-color:#e9a4a4;color:#c0392b;font-weight:700}
+.hol-hint{font-size:10px;color:#999;margin-top:6px;text-align:center}
+
+/* ── Overtime in capacity modal ── */
+.ot-section{margin-top:14px;padding-top:12px;border-top:1px solid var(--border)}
+.ot-head{font-size:12px;font-weight:700;color:var(--green);margin-bottom:8px}
+.ot-fields{display:flex;gap:12px}
+.ot-fields label{display:flex;flex-direction:column;font-size:9px;color:#888;font-weight:700;text-transform:uppercase;gap:3px}
+.ot-fields input{width:100px;padding:6px 8px;font-weight:400}
+.ot-note{font-size:11px;color:var(--green);font-weight:600;margin-top:6px}
