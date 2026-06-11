@@ -278,12 +278,18 @@ textarea{height:48px;resize:vertical}
 .step-note-item button{border:none;background:none;color:#c0392b;font-weight:700;font-size:15px;cursor:pointer;padding:0 2px}
 
 /* ── Calendar note badge + popover ── */
-.note-badge{position:relative;display:inline-flex;align-items:center;gap:1px;flex-shrink:0;cursor:pointer}
-.nb-ic{font-size:9px;line-height:1}
-.nb-ic.warn{filter:saturate(1.3)}
-.note-pop{display:none;position:absolute;bottom:100%;right:0;margin-bottom:4px;background:#282828;color:#fff;border-radius:6px;padding:6px 8px;width:200px;z-index:60;box-shadow:0 6px 20px rgba(0,0,0,.3);flex-direction:column;gap:4px;text-align:left;white-space:normal}
-.note-badge:hover .note-pop, .note-pop.pinned{display:flex}
-.note-pop-item{font-size:11px;line-height:1.3}
-.note-pop-item.warning{color:#ffd0d0}
-.note-pop-item.note{color:#d8e6fb}
-.note-pop-item b{font-weight:700}
+.note-badge{position:relative;display:inline-flex;align-items:center;gap:2px;flex-shrink:0;cursor:pointer}
+.nb-ic{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:4px;font-size:11px;line-height:1}
+.nb-ic sup{font-size:7px;font-weight:700;margin-left:1px}
+.nb-ic.warn{background:#FFD23F;color:#5a4300;border:1px solid #e0b400}
+.nb-ic.note{background:#A7D3F5;color:#0a3a5c;border:1px solid #79b8e8}
+.note-pop{display:none;position:absolute;bottom:100%;right:0;margin-bottom:6px;background:#282828;color:#fff;border-radius:8px;padding:8px;width:230px;z-index:70;box-shadow:0 8px 24px rgba(0,0,0,.35);flex-direction:column;gap:6px;text-align:left;white-space:normal;cursor:default}
+.note-badge:hover .note-pop, .note-badge.open .note-pop{display:flex}
+.note-pop::after{content:'';position:absolute;top:100%;right:8px;border:6px solid transparent;border-top-color:#282828}
+.note-pop-item{display:flex;gap:6px;font-size:12px;line-height:1.35;align-items:flex-start}
+.npi-ic{flex-shrink:0;width:18px;height:18px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:11px}
+.note-pop-item.warning .npi-ic{background:#FFD23F;color:#5a4300}
+.note-pop-item.note .npi-ic{background:#A7D3F5;color:#0a3a5c}
+.npi-text{flex:1;word-break:break-word}
+.note-pop-item.warning .npi-text{color:#ffe9a8}
+.note-pop-item.note .npi-text{color:#cfe6fb}
