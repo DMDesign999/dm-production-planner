@@ -251,3 +251,14 @@ textarea{height:48px;resize:vertical}
 .dept-enable input{width:auto}
 .add-dept-btn{margin-top:10px;width:100%;padding:9px;border:1px dashed var(--blue);border-radius:8px;color:var(--blue);font-weight:600;background:#f7faff;cursor:pointer;font-size:13px}
 .add-dept-btn:hover{background:#eef4fb}
+
+/* ── Completion markers (3 states) ── */
+.mark{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;flex-shrink:0;cursor:pointer;box-sizing:border-box;transition:all .12s ease}
+.mark-wait{border:2px dashed #c9c9c9;background:#f0f0f0;cursor:not-allowed}
+.mark-ready{border:2px solid #9aa6b2;background:#fff}
+.mark-ready:hover{border-color:#2ecc71;background:#eafaef;box-shadow:0 0 0 2px rgba(46,204,113,.15)}
+.mark-done{border:2px solid #27ae60;background:#27ae60}
+.mark-done:hover{background:#239552;border-color:#239552}
+
+/* ── Fixed-width date label so nav buttons don't shift ── */
+.date-label{display:inline-block;width:230px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
