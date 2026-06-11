@@ -55,18 +55,24 @@ export function jobToRow(j) {
 
 // ─── Load everything ───
 export async function loadAll() {
-  const [jobsRes, capRes, resRes, seqRes, deptRes2] = await Promise.all([
+  const [jobsRes, capRes, resRes, seqRes, deptRes2, staffRes, holsRes, otRes] = await Promise.all([
     supabase.from('jobs').select('*').order('id'),
     supabase.from('capacity').select('*'),
     supabase.from('dept_resources').select('*'),
     supabase.from('day_sequence').select('*'),
     supabase.from('departments').select('*').order('sort_order'),
+    supabase.from('staff').select('*').order('id'),
+    supabase.from('staff_holidays').select('*'),
+    supabase.from('overtime').select('*'),
   ])
   if (jobsRes.error) throw jobsRes.error
   if (capRes.error) throw capRes.error
   if (resRes.error) throw resRes.error
   if (seqRes.error) throw seqRes.error
   if (deptRes2.error) throw deptRes2.error
+  if (staffRes.error) throw staffRes.error
+  if (holsRes.error) throw holsRes.error
+  if (otRes.error) throw otRes.error
 
   const jobs = (jobsRes.data || []).map(rowToJob)
 
@@ -82,21 +88,75 @@ export async function loadAll() {
   const daySeq = {}
   for (const s of seqRes.data || []) daySeq[`${s.dept}|${s.day}`] = s.job_ids || []
 
-  // departments: full editable config
+  // departments: full editable config incl. type + working pattern
   const departments = (deptRes2.data || []).map(d => ({
     key: d.key, label: d.label, color: d.color, bg: d.bg, text: d.text,
     res: d.res, enabled: d.enabled !== false, sortOrder: d.sort_order ?? 0,
+    deptType: d.dept_type || 'people',
+    dayStart: d.day_start ?? 480, dayEnd: d.day_end ?? 990,
+    breakMins: d.break_mins ?? 30, machineHours: d.machine_hours ?? 8,
   }))
 
-  return { jobs, capacity, deptRes, daySeq, departments }
+  // staff
+  const staff = (staffRes.data || []).map(s => ({
+    id: s.id, name: s.name || '', homeDept: s.home_dept || '', alsoDepts: s.also_depts || [],
+  }))
+
+  // holidays: { staffId: Set-like array of 'YYYY-MM-DD' }
+  const holidays = {}
+  for (const h of holsRes.data || []) {
+    if (!holidays[h.staff_id]) holidays[h.staff_id] = []
+    holidays[h.staff_id].push(h.day)
+  }
+
+  // overtime: { "dept|day": {extraHours, staffCount} }
+  const overtime = {}
+  for (const o of otRes.data || []) overtime[`${o.dept}|${o.day}`] = { extraHours: Number(o.extra_hours)||0, staffCount: o.staff_count||1 }
+
+  return { jobs, capacity, deptRes, daySeq, departments, staff, holidays, overtime }
+}
+
+// ─── Staff CRUD ───
+export async function insertStaffDb(s) {
+  const { data, error } = await supabase.from('staff').insert({ name:s.name, home_dept:s.homeDept||null, also_depts:s.alsoDepts||[] }).select().single()
+  if (error) throw error
+  return { id:data.id, name:data.name, homeDept:data.home_dept||'', alsoDepts:data.also_depts||[] }
+}
+export async function updateStaffDb(s) {
+  const { error } = await supabase.from('staff').update({ name:s.name, home_dept:s.homeDept||null, also_depts:s.alsoDepts||[] }).eq('id', s.id)
+  if (error) throw error
+}
+export async function deleteStaffDb(id) {
+  const { error } = await supabase.from('staff').delete().eq('id', id)
+  if (error) throw error
+}
+export async function setHolidayDb(staffId, day, isOff) {
+  if (isOff) {
+    const { error } = await supabase.from('staff_holidays').upsert({ staff_id:staffId, day })
+    if (error) throw error
+  } else {
+    const { error } = await supabase.from('staff_holidays').delete().eq('staff_id',staffId).eq('day',day)
+    if (error) throw error
+  }
+}
+export async function setOvertimeDb(dept, day, extraHours, staffCount) {
+  if ((extraHours||0) <= 0) {
+    const { error } = await supabase.from('overtime').delete().eq('dept',dept).eq('day',day)
+    if (error) throw error
+  } else {
+    const { error } = await supabase.from('overtime').upsert({ dept, day, extra_hours:extraHours, staff_count:staffCount||1 })
+    if (error) throw error
+  }
 }
 
 // ─── Departments CRUD ───
 export async function saveDepartmentsDb(depts) {
-  // upsert all departments with their current order/enabled/label/etc.
   const rows = depts.map((d,i) => ({
     key: d.key, label: d.label, color: d.color, bg: d.bg, text: d.text,
     res: d.res, enabled: d.enabled !== false, sort_order: i,
+    dept_type: d.deptType || 'people',
+    day_start: d.dayStart ?? 480, day_end: d.dayEnd ?? 990,
+    break_mins: d.breakMins ?? 30, machine_hours: d.machineHours ?? 8,
   }))
   const { error } = await supabase.from('departments').upsert(rows)
   if (error) throw error
@@ -109,6 +169,7 @@ export async function seedDepartmentsIfEmpty(defaultDepts) {
     const rows = defaultDepts.map((d,i) => ({
       key: d.key, label: d.label, color: d.color, bg: d.bg, text: d.text,
       res: d.res, enabled: true, sort_order: i,
+      dept_type:'people', day_start:480, day_end:990, break_mins:30, machine_hours:8,
     }))
     const { error: e2 } = await supabase.from('departments').upsert(rows)
     if (e2) throw e2
