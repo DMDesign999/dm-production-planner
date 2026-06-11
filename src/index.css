@@ -234,3 +234,20 @@ textarea{height:48px;resize:vertical}
 .overlap-inputs{display:flex;align-items:center;gap:4px}
 .overlap-inputs input{width:56px;padding:4px 6px}
 .overlap-inputs select{width:auto}
+
+/* ── Settings: departments ── */
+.dept-settings{display:flex;flex-direction:column;gap:6px}
+.dept-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:#fff}
+.dept-row.off{background:#fafafa;opacity:.6}
+.dept-move{display:flex;flex-direction:column;gap:1px}
+.dept-move button{border:1px solid var(--border);background:#f7f7f7;border-radius:3px;width:22px;height:16px;font-size:8px;line-height:1;cursor:pointer;color:#666;padding:0}
+.dept-move button:hover:not(:disabled){background:#eaeaea;color:#222}
+.dept-move button:disabled{opacity:.3;cursor:default}
+.dept-color{width:30px;height:30px;border:1px solid var(--border);border-radius:5px;padding:0;cursor:pointer;flex-shrink:0;background:none}
+.dept-label{flex:1;padding:7px 9px;font-size:13px;font-weight:600}
+.dept-res-lbl{display:flex;flex-direction:column;font-size:9px;color:#999;font-weight:700;text-transform:uppercase;letter-spacing:.04em;gap:2px;align-items:center}
+.dept-res{width:54px;text-align:center;padding:5px}
+.dept-enable{display:flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:#555;cursor:pointer;width:48px}
+.dept-enable input{width:auto}
+.add-dept-btn{margin-top:10px;width:100%;padding:9px;border:1px dashed var(--blue);border-radius:8px;color:var(--blue);font-weight:600;background:#f7faff;cursor:pointer;font-size:13px}
+.add-dept-btn:hover{background:#eef4fb}
