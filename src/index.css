@@ -189,6 +189,7 @@ textarea{height:48px;resize:vertical}
 
 /* ── Redesigned job form ── */
 .mbox-wide{width:620px}
+.mbox-settings{width:860px;max-width:96vw}
 .form-section{margin-bottom:18px}
 .section-head{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#888;padding-bottom:6px;margin-bottom:10px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
 .section-total{font-size:12px;font-weight:700;color:#282828;text-transform:none;letter-spacing:0}
@@ -278,14 +279,13 @@ textarea{height:48px;resize:vertical}
 .step-note-item button{border:none;background:none;color:#c0392b;font-weight:700;font-size:15px;cursor:pointer;padding:0 2px}
 
 /* ── Calendar note badge + popover ── */
-.note-badge{position:relative;display:inline-flex;align-items:center;gap:2px;flex-shrink:0;cursor:pointer}
+.note-badge{display:inline-flex;align-items:center;gap:2px;flex-shrink:0;cursor:pointer}
 .nb-ic{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:4px;font-size:11px;line-height:1}
 .nb-ic sup{font-size:7px;font-weight:700;margin-left:1px}
 .nb-ic.warn{background:#FFD23F;color:#5a4300;border:1px solid #e0b400}
 .nb-ic.note{background:#A7D3F5;color:#0a3a5c;border:1px solid #79b8e8}
-.note-pop{display:none;position:absolute;bottom:100%;right:0;margin-bottom:6px;background:#282828;color:#fff;border-radius:8px;padding:8px;width:230px;z-index:70;box-shadow:0 8px 24px rgba(0,0,0,.35);flex-direction:column;gap:6px;text-align:left;white-space:normal;cursor:default}
-.note-badge:hover .note-pop, .note-badge.open .note-pop{display:flex}
-.note-pop::after{content:'';position:absolute;top:100%;right:8px;border:6px solid transparent;border-top-color:#282828}
+/* fixed popover rendered at document level — escapes pill overflow:hidden */
+.note-pop-fixed{position:fixed;transform:translateY(-100%);margin-top:-8px;background:#282828;color:#fff;border-radius:8px;padding:8px;width:230px;z-index:9000;box-shadow:0 8px 24px rgba(0,0,0,.35);display:flex;flex-direction:column;gap:6px;text-align:left;white-space:normal;cursor:default}
 .note-pop-item{display:flex;gap:6px;font-size:12px;line-height:1.35;align-items:flex-start}
 .npi-ic{flex-shrink:0;width:18px;height:18px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:11px}
 .note-pop-item.warning .npi-ic{background:#FFD23F;color:#5a4300}
@@ -301,15 +301,38 @@ textarea{height:48px;resize:vertical}
 .settings-help{font-size:12px;color:#666;margin-bottom:12px}
 .settings-warn{font-size:11px;color:#b9770f;margin-top:10px;background:#FFF7E8;border:1px solid #f0d9a8;border-radius:6px;padding:8px 10px}
 
-/* ── Dept rows v2 (with pattern) ── */
-.dept-row2{border:1px solid var(--border);border-radius:8px;background:#fff;margin-bottom:8px;overflow:hidden}
-.dept-row2.off{background:#fafafa;opacity:.6}
-.dept-row-top{display:flex;align-items:center;gap:10px;padding:8px 10px}
-.dept-row-pattern{display:flex;align-items:flex-end;gap:12px;padding:8px 10px 10px 46px;background:#f7f9fb;border-top:1px dashed var(--border);flex-wrap:wrap}
-.dept-row-pattern label{display:flex;flex-direction:column;font-size:9px;color:#888;font-weight:700;text-transform:uppercase;letter-spacing:.04em;gap:3px}
-.dept-row-pattern input{width:84px;padding:5px 7px;font-size:12px;font-weight:400;text-transform:none}
-.dept-type{padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:5px;background:#fff}
-.pattern-note{flex:1;min-width:140px;font-size:10px;color:#999;font-weight:400;text-transform:none;letter-spacing:0;align-self:center}
+/* ── Dept rows (clean grid) ── */
+.drow{display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--border);border-radius:8px;background:#fff;margin-bottom:8px}
+.drow.off{background:#fafafa;opacity:.6}
+.drow-move{display:flex;flex-direction:column;gap:1px;flex-shrink:0}
+.drow-move button{border:1px solid var(--border);background:#f7f7f7;border-radius:3px;width:24px;height:17px;font-size:8px;line-height:1;cursor:pointer;color:#666;padding:0}
+.drow-move button:hover:not(:disabled){background:#eaeaea;color:#222}
+.drow-move button:disabled{opacity:.3;cursor:default}
+.drow-color{width:34px;height:34px;border:1px solid var(--border);border-radius:6px;padding:0;cursor:pointer;flex-shrink:0;background:none}
+.drow-fields{display:flex;align-items:flex-end;gap:10px;flex:1;flex-wrap:wrap}
+.fld{display:flex;flex-direction:column;gap:3px;font-size:9px;color:#888;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.fld input,.fld select{font-size:13px;font-weight:400;text-transform:none;letter-spacing:0;padding:7px 9px;border:1px solid var(--border);border-radius:5px;background:#fff}
+.fld-name{flex:1;min-width:160px}
+.fld-name input{width:100%}
+.fld-num input{width:74px;text-align:center}
+.fld-on{align-items:center}
+.fld-on input{width:18px;height:18px;margin-top:4px}
+
+/* ── Shift pattern editor ── */
+.shift-day{border:1px solid var(--border);border-radius:8px;background:#fff;margin-bottom:8px;padding:10px}
+.shift-day.empty{background:#fafafa}
+.shift-day-head{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.shift-day-head strong{font-size:14px;min-width:90px}
+.shift-total{font-size:11px;color:#666;font-weight:600;flex:1}
+.shift-add{border:1px dashed var(--blue);background:#f7faff;color:var(--blue);border-radius:5px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer}
+.shift-add:hover{background:#eef4fb}
+.shift-block{display:flex;align-items:center;gap:8px;margin-bottom:5px;padding-left:4px}
+.shift-block input[type=time]{padding:5px 7px;border:1px solid var(--border);border-radius:5px;font-size:13px}
+.shift-block span{font-size:12px;color:#777}
+.shift-block-mins{font-size:11px;color:#999;min-width:54px}
+.shift-del{border:none;background:none;color:#c0392b;font-size:18px;cursor:pointer;padding:0 4px;line-height:1}
+.shift-empty-note{font-size:11px;color:#aaa;font-style:italic;padding-left:4px}
+
 
 /* ── Staff tab ── */
 .staff-add{display:flex;gap:8px;margin-bottom:14px}
@@ -347,3 +370,16 @@ textarea{height:48px;resize:vertical}
 .ot-fields label{display:flex;flex-direction:column;font-size:9px;color:#888;font-weight:700;text-transform:uppercase;gap:3px}
 .ot-fields input{width:100px;padding:6px 8px;font-weight:400}
 .ot-note{font-size:11px;color:var(--green);font-weight:600;margin-top:6px}
+
+/* ── "Off today" bar in day cells ── */
+.off-bar{margin-top:3px;font-size:8px;color:#a06a00;background:#fff6e0;border:1px solid #f0d9a8;border-radius:3px;padding:1px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+
+/* ── Capacity badge clickability + OT marker ── */
+.cb{cursor:pointer;transition:filter .1s}
+.cb:hover{filter:brightness(0.93)}
+.cb-ot{margin-left:3px;font-size:7px;font-weight:800;background:var(--green);color:#fff;border-radius:3px;padding:0 3px;vertical-align:middle}
+.ot-sub{font-size:10px;color:#999;margin-bottom:8px}
+
+/* ── Weekend OT entry ── */
+.wknd-ot-btn{width:100%;margin-top:4px;padding:3px;border:1px dashed #c9c9c9;background:#fafafa;color:#999;border-radius:4px;font-size:8px;cursor:pointer}
+.wknd-ot-btn:hover{background:#f0f4f9;border-color:var(--blue);color:var(--blue)}
