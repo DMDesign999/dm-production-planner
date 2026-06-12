@@ -113,7 +113,19 @@ export async function loadAll() {
   const overtime = {}
   for (const o of otRes.data || []) overtime[`${o.dept}|${o.day}`] = { extraHours: Number(o.extra_hours)||0, staffCount: o.staff_count||1 }
 
-  return { jobs, capacity, deptRes, daySeq, departments, staff, holidays, overtime }
+  // company shift pattern (single row in app_settings)
+  let shifts = null
+  try {
+    const { data:sd } = await supabase.from('app_settings').select('value').eq('key','shifts').maybeSingle()
+    if (sd && sd.value) shifts = sd.value
+  } catch {}
+
+  return { jobs, capacity, deptRes, daySeq, departments, staff, holidays, overtime, shifts }
+}
+
+export async function saveShiftsDb(shifts) {
+  const { error } = await supabase.from('app_settings').upsert({ key:'shifts', value:shifts })
+  if (error) throw error
 }
 
 // ─── Staff CRUD ───
