@@ -59,6 +59,24 @@ const nextWd = s => { let d = addDays(s,1); while(isWknd(d)) d = addDays(d,1); r
 const fmtM = m => { m=Math.round(m||0); const h=Math.floor(m/60),r=m%60; return h>0?(r>0?`${h}h ${r}m`:`${h}h`):`${r}m` }
 const fmtT = m => { const h=Math.floor(m/60)%24,mn=m%60; return `${String(h).padStart(2,'0')}:${String(mn).padStart(2,'0')}` }
 const deptOfDefault = k => DEFAULT_DEPTS.find(d=>d.key===k)||DEFAULT_DEPTS[0]
+
+// Custom "overtime" icon — a clock with a plus, drawn so it stays crisp at any size.
+const OTIcon = ({ size=14, color='#c0392b' }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} style={{display:'block'}} aria-hidden="true">
+    <g fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {/* clock face, open at bottom-right where the plus sits */}
+      <path d="M12 3.5a8.5 8.5 0 1 1-6 14.5" />
+      {/* hands */}
+      <path d="M12 7.5V12l2.5 1.6" />
+      {/* tick marks */}
+      <path d="M12 3.5v1.4M3.5 12h1.4M20.5 12h-1.4" />
+    </g>
+    {/* plus */}
+    <g stroke={color} strokeWidth="2.2" strokeLinecap="round">
+      <path d="M16.5 17.5h5M19 15v5" />
+    </g>
+  </svg>
+)
 const todayStr = () => fmt(new Date())
 const dowLabel = s => ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][parseD(s).getDay()]
 const dateLE = (a,b) => a <= b // ISO date strings compare correctly
@@ -122,6 +140,7 @@ export default function App({ session }) {
   const [capVal, setCapVal] = useState('')
   const [otHours, setOtHours] = useState('')
   const [otStaff, setOtStaff] = useState('1')
+  const [weekendOT, setWeekendOT] = useState(null) // {date, rows:{deptKey:{on,hours,staff}}}
   const [form, setForm] = useState(null)
   const [modalOpenId, setModalOpenId] = useState(0) // increments each open → unique key so JobModal always remounts fresh
   const [dirty, setDirty] = useState(false)
@@ -488,7 +507,7 @@ export default function App({ session }) {
       <span className="cb" style={{background:cbg,color:ctxt}}
             title="Click to set capacity or add overtime for this day"
             onClick={e=>{e.stopPropagation();setCapEdit(`${dk}|${date}`);setCapVal(String(capOf(dk,date)));const ot=otOf(dk,date);setOtHours(ot&&ot.extraHours?String(ot.extraHours):'');setOtStaff(ot&&ot.staffCount?String(ot.staffCount):'1');setModal('cap')}}>
-        {fmtM(usedMM)}/{fmtM(totMM)}{hasOt && <span className="cb-ot" title="Overtime added">+OT</span>}
+        {fmtM(usedMM)}/{fmtM(totMM)}{hasOt && <span className="cb-ot-ic" title="Overtime added"><OTIcon size={11} color="#c0392b" /></span>}
       </span>
     )
   }
@@ -699,6 +718,17 @@ export default function App({ session }) {
   const navNext = () => { if(view==='month'){ let nm=cursor.m+1,ny=cursor.y; if(nm>11){nm=0;ny++} setCursor({y:ny,m:nm}) } else if(view==='week') setAnchor(addDays(anchor,7)); else setAnchor(addDays(anchor,1)) }
   const goToday = () => { const d=new Date(); setCursor({y:d.getFullYear(),m:d.getMonth()}); setAnchor(todayStr()) }
   const zoomToDay = date => { setAnchor(date); setView('day') }
+  // Open the weekend overtime picker, pre-filled with any existing OT for that day
+  const openWeekendOT = date => {
+    const rows = {}
+    for(const dp of DEPTS){
+      const ot = otOf(dp.key, date)
+      rows[dp.key] = { on: !!ot, hours: ot? String(ot.extraHours) : '', staff: ot? String(ot.staffCount||1) : '1' }
+    }
+    setWeekendOT({ date, rows })
+    setModalOpenId(n=>n+1)
+    setModal('weekendOT')
+  }
 
   const emptyForm = () => ({ title:'', customer:'', subtitle:'', startDate:TODAY, dueDate:'', materialDate:'', status:'scheduled', priority:'normal', notes:'',
     deptMins:Object.fromEntries(DKEYS.map(k=>[k,0])),
@@ -898,7 +928,15 @@ export default function App({ session }) {
                       </div>
                     )
                   })}
-                  {inM && wknd && <button className="wknd-ot-btn" title="Add weekend overtime to a department" onClick={e=>{e.stopPropagation();zoomToDay(date)}}>weekend — open to add OT</button>}
+                  {inM && wknd && (() => {
+                    const anyOt = show.some(dp=>otOf(dp.key,date))
+                    return (
+                      <button className={`wknd-ot-btn${anyOt?' has-ot':''}`} title="Add weekend overtime"
+                              onClick={e=>{e.stopPropagation();openWeekendOT(date)}}>
+                        <OTIcon size={13} color={anyOt?'#c0392b':'#b06a6a'} /> {anyOt?'Weekend OT':'Add weekend OT'}
+                      </button>
+                    )
+                  })()}
                   {inM && (() => { const off = whosOff(date); return off.length>0 ? <div className="off-bar" title={`Off today: ${off.join(', ')}`}>Off: {off.join(', ')}</div> : null })()}
                 </div>
               )
@@ -1098,6 +1136,52 @@ export default function App({ session }) {
         )
       })()}
 
+      {/* Weekend overtime picker — choose which depts work and for how long */}
+      {modal==='weekendOT' && weekendOT && (() => {
+        const { date, rows } = weekendOT
+        const dow = parseD(date).toLocaleDateString('default',{weekday:'long', day:'numeric', month:'long'})
+        const setRow = (k,patch) => setWeekendOT(w=>({ ...w, rows:{...w.rows, [k]:{...w.rows[k], ...patch}} }))
+        const saveWeekend = async () => {
+          for(const dp of DEPTS){
+            const r = rows[dp.key] || {}
+            const hrs = r.on ? (parseFloat(r.hours)||0) : 0
+            const cnt = parseInt(r.staff)||1
+            // update local
+            setOvertime(prev=>{ const n={...prev}; if(hrs>0) n[`${dp.key}|${date}`]={extraHours:hrs,staffCount:cnt}; else delete n[`${dp.key}|${date}`]; return n })
+            try { await setOvertimeDb(dp.key, date, hrs, cnt) } catch(e){ setLoadErr(e.message) }
+          }
+          setDirty(true); setModal(null)
+        }
+        return (
+          <div className="mwrap" onClick={e=>{ if(e.target===e.currentTarget) setModal(null) }}>
+            <div className="mbox mbox-wide" onClick={e=>e.stopPropagation()}>
+              <div className="mh"><h2><span style={{display:'inline-flex',verticalAlign:'-3px',marginRight:6}}><OTIcon size={18} color="#c0392b" /></span>Weekend overtime — {dow}</h2><button className="x" onClick={()=>setModal(null)}>×</button></div>
+              <div className="mb">
+                <p className="settings-help">Tick which departments are working this day, and set how many hours and how many {''}people/machines. Weekends have no normal hours, so this is the only capacity those days get.</p>
+                <div className="wot-list">
+                  <div className="wot-head"><span>Working?</span><span>Department</span><span>Hours</span><span>Staff / machines</span></div>
+                  {DEPTS.map(dp=>{
+                    const r = rows[dp.key] || {on:false,hours:'',staff:'1'}
+                    return (
+                      <div key={dp.key} className={`wot-row${r.on?' on':''}`}>
+                        <input type="checkbox" checked={!!r.on} onChange={e=>setRow(dp.key,{on:e.target.checked})} />
+                        <span className="wot-dept"><span className="wot-dot" style={{background:dp.color}} />{dp.label}</span>
+                        <input type="number" min="0" max="16" step="0.5" value={r.hours} placeholder="0" disabled={!r.on} onChange={e=>setRow(dp.key,{hours:e.target.value})} />
+                        <input type="number" min="1" max="50" value={r.staff} disabled={!r.on} onChange={e=>setRow(dp.key,{staff:e.target.value})} />
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+              <div className="mf">
+                <button className="btn" onClick={()=>setModal(null)}>Cancel</button>
+                <button className="btn-green" onClick={saveWeekend}>Save weekend overtime</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
       {modal==='cap' && capEdit && (() => {
         const [dk,ds]=capEdit.split('|'), dp=deptOf(dk), res=resOf(dk,ds)
         const isMachine = (deptInfo(dk).deptType||'people')==='machine'
@@ -1112,7 +1196,7 @@ export default function App({ session }) {
                 <div style={{fontSize:10,color:'#888',marginTop:4}}>{fmtM(parseInt(capVal)||0)} each · base total {fmtM((parseInt(capVal)||0)*res)}</div>
 
                 <div className="ot-section">
-                  <div className="ot-head">＋ Add overtime for this day</div>
+                  <div className="ot-head"><span style={{display:'inline-flex',verticalAlign:'-2px',marginRight:4}}><OTIcon size={14} color="#c0392b" /></span>Add overtime for this day</div>
                   <div className="ot-sub">Extra hours on top of the normal day — also how you add weekend (Sat/Sun) working.</div>
                   <div className="ot-fields">
                     <label>Extra hours<input type="number" min="0" max="12" step="0.5" value={otHours} placeholder="0" onChange={e=>setOtHours(e.target.value)} /></label>
