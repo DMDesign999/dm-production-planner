@@ -377,9 +377,21 @@ textarea{height:48px;resize:vertical}
 /* ── Capacity badge clickability + OT marker ── */
 .cb{cursor:pointer;transition:filter .1s}
 .cb:hover{filter:brightness(0.93)}
-.cb-ot{margin-left:3px;font-size:7px;font-weight:800;background:var(--green);color:#fff;border-radius:3px;padding:0 3px;vertical-align:middle}
+.cb-ot-ic{margin-left:3px;display:inline-flex;vertical-align:middle}
 .ot-sub{font-size:10px;color:#999;margin-bottom:8px}
 
 /* ── Weekend OT entry ── */
-.wknd-ot-btn{width:100%;margin-top:4px;padding:3px;border:1px dashed #c9c9c9;background:#fafafa;color:#999;border-radius:4px;font-size:8px;cursor:pointer}
-.wknd-ot-btn:hover{background:#f0f4f9;border-color:var(--blue);color:var(--blue)}
+.wknd-ot-btn{display:flex;align-items:center;justify-content:center;gap:4px;width:100%;margin-top:4px;padding:4px;border:1px dashed #d9b3b3;background:#fdf6f6;color:#a05656;border-radius:4px;font-size:9px;font-weight:600;cursor:pointer}
+.wknd-ot-btn:hover{background:#fbeaea;border-color:#c0392b;color:#c0392b}
+.wknd-ot-btn.has-ot{background:#fbeaea;border-color:#c0392b;border-style:solid;color:#c0392b}
+
+/* ── Weekend OT picker ── */
+.wot-list{display:flex;flex-direction:column;gap:4px}
+.wot-head{display:grid;grid-template-columns:64px 1fr 90px 120px;gap:10px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#999;padding:0 8px 4px}
+.wot-row{display:grid;grid-template-columns:64px 1fr 90px 120px;gap:10px;align-items:center;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:#fff}
+.wot-row.on{background:#fdf6f6;border-color:#e9c4c4}
+.wot-row input[type=checkbox]{width:18px;height:18px;justify-self:center}
+.wot-row input[type=number]{padding:6px 8px;border:1px solid var(--border);border-radius:5px;font-size:13px;width:100%}
+.wot-row input:disabled{background:#f4f4f4;opacity:.5}
+.wot-dept{display:flex;align-items:center;gap:7px;font-weight:600;font-size:13px}
+.wot-dot{width:10px;height:10px;border-radius:3px;flex-shrink:0}
