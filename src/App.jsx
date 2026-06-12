@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from './supabaseClient'
-import { loadAll, insertJob, updateJob, deleteJobDb, setCapacityDb, clearCapacityDb, setDeptResDb, seedIfEmpty, setDaySequenceDb, saveDepartmentsDb, seedDepartmentsIfEmpty, insertStaffDb, updateStaffDb, deleteStaffDb, setHolidayDb, setOvertimeDb } from './data'
+import { loadAll, insertJob, updateJob, deleteJobDb, setCapacityDb, clearCapacityDb, setDeptResDb, seedIfEmpty, setDaySequenceDb, saveDepartmentsDb, seedDepartmentsIfEmpty, insertStaffDb, updateStaffDb, deleteStaffDb, setHolidayDb, setOvertimeDb, saveShiftsDb } from './data'
 import JobModal from './JobModal'
 import SettingsModal from './SettingsModal'
 import ErrorBoundary from './ErrorBoundary'
@@ -29,6 +29,26 @@ const PRIORITY = {
 }
 const DEF_CAP = 480, WD = 480
 const DAY_START = 8, DAY_END = 17
+
+// ─── Default company shift pattern ───────────────────────────
+// Per weekday (0=Sun … 6=Sat), an array of working blocks {start,end} in minutes from midnight.
+// Breaks are simply the gaps between blocks. Sat/Sun empty = overtime-only.
+// D&M standard: Mon–Thu 08:00–17:00 with 3 breaks; Fri 08:00–14:00 with 1 lunch.
+const mins = (h,m=0) => h*60+m
+const DEFAULT_SHIFTS = {
+  0: [], // Sun — overtime only
+  1: [[mins(8),mins(10)],[mins(10,15),mins(12,15)],[mins(12,45),mins(14,45)],[mins(15),mins(17)]], // Mon
+  2: [[mins(8),mins(10)],[mins(10,15),mins(12,15)],[mins(12,45),mins(14,45)],[mins(15),mins(17)]], // Tue
+  3: [[mins(8),mins(10)],[mins(10,15),mins(12,15)],[mins(12,45),mins(14,45)],[mins(15),mins(17)]], // Wed
+  4: [[mins(8),mins(10)],[mins(10,15),mins(12,15)],[mins(12,45),mins(14,45)],[mins(15),mins(17)]], // Thu
+  5: [[mins(8),mins(10,45)],[mins(11,15),mins(14)]], // Fri
+  6: [], // Sat — overtime only
+}
+// Working minutes in a day's block list (sum of block durations)
+const shiftMins = blocks => (blocks||[]).reduce((s,[a,b])=>s+Math.max(0,b-a),0)
+// Earliest start / latest end across a day's blocks (for the time grid)
+const shiftStart = blocks => (blocks&&blocks.length) ? Math.min(...blocks.map(b=>b[0])) : mins(8)
+const shiftEnd = blocks => (blocks&&blocks.length) ? Math.max(...blocks.map(b=>b[1])) : mins(17)
 
 // ─── Helpers ─────────────────────────────────────────────────
 const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
@@ -85,6 +105,7 @@ export default function App({ session }) {
   const [staff, setStaff] = useState([])
   const [holidays, setHolidays] = useState({}) // staffId -> [dates]
   const [overtime, setOvertime] = useState({}) // "dept|day" -> {extraHours, staffCount}
+  const [shifts, setShifts] = useState(DEFAULT_SHIFTS) // company-wide weekly shift pattern
   const [loading, setLoading] = useState(true)
   const [loadErr, setLoadErr] = useState(null)
 
@@ -105,7 +126,8 @@ export default function App({ session }) {
   const [modalOpenId, setModalOpenId] = useState(0) // increments each open → unique key so JobModal always remounts fresh
   const [dirty, setDirty] = useState(false)
   const [dragJob, setDragJob] = useState(null) // {jobId, dept}
-  const [openNote, setOpenNote] = useState(null) // {jobId, dept} whose notes are pinned open
+  const [openNote, setOpenNote] = useState(null) // {jobId, dept, notes, x, y} pinned popover
+  const [hoverNote, setHoverNote] = useState(null) // {notes, x, y} transient hover popover
 
   // Refs so the realtime callback always sees current values (avoids stale closures)
   const modalRef = useRef(null)
@@ -118,7 +140,7 @@ export default function App({ session }) {
   async function doRefresh() {
     if (modalRef.current) { pendingRefresh.current = true; return }
     try {
-      const { jobs:j, capacity:c, deptRes:r, daySeq:s, departments:dp, staff:st, holidays:hd, overtime:ot } = await loadAll()
+      const { jobs:j, capacity:c, deptRes:r, daySeq:s, departments:dp, staff:st, holidays:hd, overtime:ot, shifts:sh } = await loadAll()
       // Re-check AFTER the await: if a modal opened while loading, don't disrupt it.
       if (modalRef.current) { pendingRefresh.current = true; return }
       setJobsRaw(j.map(migrateJob))
@@ -129,6 +151,7 @@ export default function App({ session }) {
       setStaff(st || [])
       setHolidays(hd || {})
       setOvertime(ot || {})
+      if (sh) setShifts(sh)
       setLoadErr(null)
     } catch (e) {
       setLoadErr(e.message || 'Failed to load data')
@@ -169,6 +192,7 @@ export default function App({ session }) {
       .on('postgres_changes', { event:'*', schema:'public', table:'staff' }, () => refresh())
       .on('postgres_changes', { event:'*', schema:'public', table:'staff_holidays' }, () => refresh())
       .on('postgres_changes', { event:'*', schema:'public', table:'overtime' }, () => refresh())
+      .on('postgres_changes', { event:'*', schema:'public', table:'app_settings' }, () => refresh())
       .subscribe()
     return () => { active = false; if (refreshTimer.current) clearTimeout(refreshTimer.current); supabase.removeChannel(channel) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -184,43 +208,60 @@ export default function App({ session }) {
 
   const TODAY = todayStr()
 
-  // ── New capacity model (Stage 3) ──
+  // ── Capacity model (Stage 3 + shift patterns) ──
   const deptInfo = dk => depts.find(d=>d.key===dk) || deptOfDefault(dk)
-  // Working minutes per single resource per day for a department
-  const workingMins = dk => {
+  // The shift blocks for a dept on a given weekday: dept override if set, else company standard.
+  const shiftBlocksFor = (dk, date) => {
+    const d = deptInfo(dk)
+    const dow = parseD(date).getDay()
+    // dept can override the company pattern with its own d.shifts {0..6:[[a,b],...]}
+    if(d.shifts && d.shifts[dow]) return d.shifts[dow]
+    return shifts[dow] || []
+  }
+  // Working minutes per single resource for a dept on a date.
+  const workingMins = (dk, date) => {
     const d = deptInfo(dk)
     if((d.deptType||'people')==='machine'){
+      // machine depts run a flat number of hours every weekday (0 at weekend unless OT)
+      if(date && isWknd(date)) return 0
       return Math.round((d.machineHours ?? 8) * 60)
     }
-    const span = (d.dayEnd ?? 990) - (d.dayStart ?? 480)
-    return Math.max(0, span - (d.breakMins ?? 30))
+    if(!date) return shiftMins(shifts[1]||[]) // generic estimate = a Monday
+    return shiftMins(shiftBlocksFor(dk, date))
   }
   // Staff assigned to a dept (home dept, or 'also works in')
   const staffForDept = dk => staff.filter(s => s.homeDept===dk || (s.alsoDepts||[]).includes(dk))
   const onHoliday = (staffId, date) => (holidays[staffId]||[]).includes(date)
+  // Names of staff off on a given date
+  const whosOff = date => staff.filter(s => onHoliday(s.id, date)).map(s => s.name).filter(Boolean)
   // Resources available for a dept on a date
   const resOf = (dk, date) => {
     const d = deptInfo(dk)
     if((d.deptType||'people')==='machine'){
       return deptRes[dk] ?? d.res ?? 1   // machines: manual count
     }
-    // people: count staff whose HOME dept is this one and who aren't on holiday that date.
-    // (flexible 'also works in' staff are shown as availability but not auto-counted here)
     const home = staff.filter(s=>s.homeDept===dk)
     if(home.length===0) return deptRes[dk] ?? d.res ?? 1  // fallback to manual if no staff assigned yet
     if(!date) return home.length
     return home.filter(s=>!onHoliday(s.id,date)).length
   }
   // Manual per-day capacity override (minutes per resource) still wins if set
-  const capOf = (dk,date) => (capacity[dk]||{})[date] ?? workingMins(dk)
+  const capOf = (dk,date) => (capacity[dk]||{})[date] ?? workingMins(dk,date)
   // Overtime for a dept/day
   const otOf = (dk,date) => overtime[`${dk}|${date}`] || null
-  // Total man-minutes available for a dept on a date
+  // Total man-minutes available for a dept on a date (base + overtime).
   const manCap = (dk,date) => {
     let base = resOf(dk,date) * capOf(dk,date)
     const ot = otOf(dk,date)
     if(ot && ot.extraHours>0) base += Math.round(ot.extraHours*60) * (ot.staffCount||1)
     return base
+  }
+  // The earliest working minute of a dept's day (for placing blocks on the time grid)
+  const dayStartMin = (dk,date) => {
+    const d = deptInfo(dk)
+    if((d.deptType||'people')==='machine') return mins(8)
+    const blocks = shiftBlocksFor(dk,date)
+    return blocks.length ? shiftStart(blocks) : mins(8)
   }
   const waitMins = w => (!w||!w.amount)?0:w.unit==='hours'?w.amount*60:w.unit==='days'?w.amount*1440:Number(w.amount)||0
 
@@ -336,7 +377,8 @@ export default function App({ session }) {
         while(remMM>0){
           if(++iterGuard > MAX_ITER) break
           if(emptyDays > MAX_EMPTY_DAYS) break
-          if(isWknd(cur.date)){ cur={date:addDays(cur.date,1),min:WD}; continue }
+          // Skip weekends UNLESS this dept has overtime capacity that day (Sat/Sun are OT-only)
+          if(isWknd(cur.date) && manCap(dk,cur.date)<=0){ cur={date:addDays(cur.date,1),min:WD}; continue }
           // Cache this dept+date's entries once per iteration (avoids scanning all entries repeatedly)
           const dayE = []
           let usedMM = 0
@@ -441,10 +483,12 @@ export default function App({ session }) {
     const usedMM = de.reduce((s,e)=>s+e.manMins,0), totMM = manCap(dk,date)
     const over=usedMM>totMM, warn=!over&&totMM>0&&usedMM>totMM*0.8
     const cbg=over?'#FCEBEB':warn?'#FFF3DC':'#EAF3DE', ctxt=over?'#7a1e1e':warn?'#633806':'#1a5c2e'
+    const hasOt = !!otOf(dk,date)
     return (
       <span className="cb" style={{background:cbg,color:ctxt}}
+            title="Click to set capacity or add overtime for this day"
             onClick={e=>{e.stopPropagation();setCapEdit(`${dk}|${date}`);setCapVal(String(capOf(dk,date)));const ot=otOf(dk,date);setOtHours(ot&&ot.extraHours?String(ot.extraHours):'');setOtStaff(ot&&ot.staffCount?String(ot.staffCount):'1');setModal('cap')}}>
-        {fmtM(usedMM)}/{fmtM(totMM)}
+        {fmtM(usedMM)}/{fmtM(totMM)}{hasOt && <span className="cb-ot" title="Overtime added">+OT</span>}
       </span>
     )
   }
@@ -481,19 +525,21 @@ export default function App({ session }) {
     if(!notes.length) return null
     const warns = notes.filter(n=>n.type==='warning')
     const plainNotes = notes.filter(n=>n.type!=='warning')
-    const isOpen = openNote && openNote.jobId===job.id && openNote.dept===dept
+    const openHere = openNote && openNote.jobId===job.id && openNote.dept===dept
+    const handler = ev => {
+      ev.stopPropagation()
+      if(openHere){ setOpenNote(null); return }
+      const r = ev.currentTarget.getBoundingClientRect()
+      setOpenNote({ jobId:job.id, dept, notes, x:r.left+r.width/2, y:r.top })
+    }
     return (
-      <span className={`note-badge${isOpen?' open':''}`} onClick={ev=>{ev.stopPropagation(); setOpenNote(isOpen?null:{jobId:job.id,dept})}}>
+      <span className="note-badge" onClick={handler} onMouseEnter={ev=>{
+        if(openNote) return
+        const r = ev.currentTarget.getBoundingClientRect()
+        setHoverNote({ notes, x:r.left+r.width/2, y:r.top })
+      }} onMouseLeave={()=>setHoverNote(null)}>
         {warns.length>0 && <span className="nb-ic warn">⚠{warns.length>1?<sup>{warns.length}</sup>:''}</span>}
         {plainNotes.length>0 && <span className="nb-ic note">🗒{plainNotes.length>1?<sup>{plainNotes.length}</sup>:''}</span>}
-        <span className="note-pop" onClick={ev=>ev.stopPropagation()}>
-          {notes.map((n,idx)=>(
-            <span key={idx} className={`note-pop-item ${n.type==='warning'?'warning':'note'}`}>
-              <span className="npi-ic">{n.type==='warning'?'⚠':'🗒'}</span>
-              <span className="npi-text">{n.text}</span>
-            </span>
-          ))}
-        </span>
       </span>
     )
   }
@@ -835,6 +881,7 @@ export default function App({ session }) {
                   </div>
                   {show.map(dp=>{
                     const de = entries.filter(e=>e.dept===dp.key&&e.date===date).sort((a,b)=>a.s-b.s)
+                    const showWkndRow = wknd && inM && (de.length>0 || otOf(dp.key,date))
                     return (
                       <div key={dp.key}>
                         {inM && !wknd && (tab==='all' ? (
@@ -842,10 +889,17 @@ export default function App({ session }) {
                             <span className="dl" style={{color:dp.color}}>{dp.label}</span>{capBadge(dp.key,date)}
                           </div>
                         ) : (<div style={{marginBottom:3}}>{capBadge(dp.key,date)} <span style={{fontSize:9,color:'#aaa'}}>{resOf(dp.key)} res</span></div>))}
+                        {showWkndRow && (
+                          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginTop:2}}>
+                            <span className="dl" style={{color:dp.color}}>{dp.label}</span>{capBadge(dp.key,date)}
+                          </div>
+                        )}
                         {de.map((e,i)=>jobPill(e,i))}
                       </div>
                     )
                   })}
+                  {inM && wknd && <button className="wknd-ot-btn" title="Add weekend overtime to a department" onClick={e=>{e.stopPropagation();zoomToDay(date)}}>weekend — open to add OT</button>}
+                  {inM && (() => { const off = whosOff(date); return off.length>0 ? <div className="off-bar" title={`Off today: ${off.join(', ')}`}>Off: {off.join(', ')}</div> : null })()}
                 </div>
               )
             })}
@@ -1027,6 +1081,23 @@ export default function App({ session }) {
       </div>
 
       {/* Capacity modal */}
+      {/* Note/warning popover — rendered at top level so it escapes pill overflow:hidden */}
+      {(openNote || hoverNote) && (() => {
+        const p = openNote || hoverNote
+        const left = Math.min(Math.max(8, p.x-115), (typeof window!=='undefined'?window.innerWidth:1000)-238)
+        const top = p.y
+        return (
+          <div className="note-pop-fixed" style={{left, top}} onClick={e=>e.stopPropagation()}>
+            {(p.notes||[]).map((n,idx)=>(
+              <div key={idx} className={`note-pop-item ${n.type==='warning'?'warning':'note'}`}>
+                <span className="npi-ic">{n.type==='warning'?'⚠':'🗒'}</span>
+                <span className="npi-text">{n.text}</span>
+              </div>
+            ))}
+          </div>
+        )
+      })()}
+
       {modal==='cap' && capEdit && (() => {
         const [dk,ds]=capEdit.split('|'), dp=deptOf(dk), res=resOf(dk,ds)
         const isMachine = (deptInfo(dk).deptType||'people')==='machine'
@@ -1036,12 +1107,13 @@ export default function App({ session }) {
               <div className="mh"><h2>Capacity — {dp.label}</h2><button className="x" onClick={()=>setModal(null)}>×</button></div>
               <div className="mb">
                 <div style={{fontSize:12,color:'#666',marginBottom:10}}>{ds} · {res} {isMachine?'machine':'person/people'}{res!==1&&!isMachine?'':''} available</div>
-                <label className="lbl">Minutes per resource ({fmtM(workingMins(dk))} normal)</label>
+                <label className="lbl">Minutes per resource ({fmtM(workingMins(dk,ds))} normal)</label>
                 <input type="number" min="0" max="1440" value={capVal} onChange={e=>setCapVal(e.target.value)} />
                 <div style={{fontSize:10,color:'#888',marginTop:4}}>{fmtM(parseInt(capVal)||0)} each · base total {fmtM((parseInt(capVal)||0)*res)}</div>
 
                 <div className="ot-section">
-                  <div className="ot-head">＋ Overtime for this day</div>
+                  <div className="ot-head">＋ Add overtime for this day</div>
+                  <div className="ot-sub">Extra hours on top of the normal day — also how you add weekend (Sat/Sun) working.</div>
                   <div className="ot-fields">
                     <label>Extra hours<input type="number" min="0" max="12" step="0.5" value={otHours} placeholder="0" onChange={e=>setOtHours(e.target.value)} /></label>
                     <label>{isMachine?'Machines':'Staff'} on OT<input type="number" min="1" max="50" value={otStaff} onChange={e=>setOtStaff(e.target.value)} /></label>
@@ -1070,9 +1142,14 @@ export default function App({ session }) {
         <SettingsModal
           key={`settings-${modalOpenId}`}
           initialDepts={depts}
+          initialShifts={shifts}
           staff={staff}
           holidays={holidays}
           onClose={()=>setModal(null)}
+          onSaveShifts={(sh)=>{
+            setShifts(sh)
+            saveShiftsDb(sh).catch(e=>setLoadErr(e.message)); setDirty(true)
+          }}
           onSaveDepts={async (cleaned)=>{
             setDepts(cleaned)
             try {
